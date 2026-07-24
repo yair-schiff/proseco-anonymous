@@ -1,6 +1,6 @@
-### LLaDA + ProSeCo SFT Eval
+### LLaDA Corrector SFT Evaluation
 
-This directory contains scripts to reproduce the evaluation for our LLaDA + ProSeCo SFT
+This directory contains scripts to reproduce the evaluation for the LLaDA corrector SFT
 experiments.
 
 The two parameters for corrector sampling are:
@@ -10,13 +10,13 @@ max_corrector_steps_per_loop = ...
 ```
 
 [`eval_llada.py`](./eval_llada.py) is the evaluation harness. It uses
-[nemo_skills](https://github.com/NVIDIA-NeMo/Skills) for dataset loading, prompt
+`nemo_skills` for dataset loading, prompt
 formatting, and benchmark evaluation, and the corrector-based diffusion sampler
 (`generate.py`) for generation, reporting NFE and throughput statistics.
 
 It requires `nemo_skills` (see the block in [`create_env.sh`](../create_env.sh)):
 ```bash
-pip install "git+https://github.com/NVIDIA-NeMo/Skills.git@da85a881d972e6fec847b90cf553a0bf9bf10638"
+pip install nemo-skills==0.7.0
 ```
 
 Generation is sharded across all `accelerate` processes and gathered on rank 0 for
@@ -25,8 +25,8 @@ it via [`eval_llada.sh`](./eval_llada.sh), or directly:
 ```bash
 accelerate launch llada/eval_llada.py \
     --benchmark human-eval \
-    --model_path kuleshov-group/proseco-llada-sft \
-    --tokenizer_path GSAI-ML/LLaDA-8B-Instruct \
+    --model_path /path/to/model \
+    --tokenizer_path /path/to/tokenizer \
     --gen_length 1024 --block_length 32 --steps 1024 \
     --apply_corrector_every_n_steps 2 --max_corrector_steps_per_loop 4 \
     --output_dir ./llada/outputs/humaneval \

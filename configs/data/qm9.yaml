@@ -1,7 +1,8 @@
 train: qm9
 valid: qm9
-tokenizer_name_or_path: yairschiff/qm9-tokenizer
-cache_dir: /share/kuleshov/ssahoo/textdiffusion/data
+dataset_name_or_path: ${oc.env:QM9_DATASET_PATH}
+tokenizer_name_or_path: ${oc.env:QM9_TOKENIZER_PATH}
+cache_dir: ${oc.env:DATA_CACHE_DIR,./.data_cache}
 wrap: False
 streaming: False
 override_cache: False

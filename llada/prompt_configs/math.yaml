@@ -1,5 +1,3 @@
-# default prompt for all math benchmarks (e.g. gsm8k, math)
-
 few_shot_examples:
   prefix: "Here are some examples of problems and solutions you can refer to.\n\n"
   template: "Problem:\n{problem}\n\nSolution:\n{solution}\n\n\n\n\n\n"

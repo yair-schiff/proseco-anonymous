@@ -1,5 +1,3 @@
-# default prompt for all code benchmarks (e.g. human-eval, mbpp)
-
 user: |-
   Here is a problem for which you need to generate/complete code:
   {question}
@@ -8,5 +6,5 @@ user: |-
 
   The solution should be in the following format:
   ```python
-  # Your code here
+  pass
   ```

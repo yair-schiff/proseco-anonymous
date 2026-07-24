@@ -1,43 +1,17 @@
 #!/bin/bash
-#SBATCH -o ../watch_folder/%x_%j.out  # output file (%j expands to jobID)
-#SBATCH -N 1                          # Total number of nodes requested
-#SBATCH --get-user-env                # retrieve the users login environment
-#SBATCH --mem=32000                   # server memory requested (per node)
-#SBATCH -t 24:00:00                   # Time limit (hh:mm:ss)
-#SBATCH --partition=gpu
-#SBATCH --constraint="[h200|h100|a100|a6000|a5000|3090]"
+#SBATCH -o ../watch_folder/%x_%j.out
+#SBATCH -N 1
+#SBATCH --get-user-env
+#SBATCH --mem=32000
+#SBATCH -t 24:00:00
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:1                  # Type/number of GPUs needed
-#SBATCH --open-mode=append            # Do not overwrite logs
-#SBATCH --requeue                     # Requeue upon preemption
-#SBATCH --exclude=snavely-compute-02,seo-compute-01
+#SBATCH --gres=gpu:1
+#SBATCH --open-mode=append
+#SBATCH --requeue
 
-<<comment
-#  Usage:
-cd scripts/
-MODEL=<ar|mdlm|udlm>
-PROP=<qed|ring_count>
-GUIDANCE=<cfg|fudge|cbg|pplm|nos>
-... additional args for each guidance method ...
-sbatch \
-  --export=ALL,MODEL=${MODEL},PROP=${PROP},GUIDANCE=${GUIDANCE},... \
-  --job-name=eval_qm9_${GUIDANCE}_${PROP}_${MODEL} \
-  eval_qm9_guidance.sh
-comment
-
-# Setup environment
-cd ../ || exit  # Go to the root directory of the repo
+cd ../ || exit
 source setup_env.sh || exit
 export HYDRA_FULL_ERROR=1
-
-# Expecting:
-#  - MODEL (choices: ar, mdlm, udlm)
-#  - PROP (choices: qed, ring_count)
-#  - GUIDANCE (each method has its own required args)
-#  - CONDITION (optional: default = 1)
-#  - SAMPLING_STEPS (optional: default = 32)
-#  - SEED (optional: default = 1)
-#  - PARAMETERIZATION (default: subs)
 
 if [ -z "${MODEL}" ]; then
   echo "MODEL is not set"
@@ -77,7 +51,6 @@ if [ -z "${PARAMETERIZATION}" ]; then
 fi
 
 subs_masking=False
-# CKPT below is unconditional model (will be overridden if GUIDANCE = "cfg")
 if [ "${MODEL}"  = "ar" ]; then
   parameterization="ar"
   diffusion="absorbing_state"
@@ -93,10 +66,9 @@ elif [ "${MODEL}" = "mdlm" ]; then
   time_conditioning=False
   sampling_use_cache=True
   if (( CORRECTOR_STEPS > 0 )); then
-    CKPT="${PWD}/outputs/qm9/corrector_no-guidance_v${VERSION}"
+    CKPT="${PWD}/outputs/qm9/corrector_no-guidance"
   else
-#    CKPT="${PWD}/outputs/qm9/mdlm_no-guidance"
-    CKPT="${PWD}/outputs/qm9/corrector_no-guidance_v${VERSION}"
+    CKPT="${PWD}/outputs/qm9/corrector_no-guidance"
   fi
 elif [ "${MODEL}" = "udlm" ]; then
   parameterization="d3pm"
@@ -112,10 +84,7 @@ fi
 
 
 guidance_args="guidance=${GUIDANCE} guidance.condition=${CONDITION}"
-###### CFG ######
 if [ "${GUIDANCE}" == "cfg" ]; then
-  # Expecting:
-  #  - GAMMA
   if [ -z "${GAMMA}" ]; then
     echo "GAMMA is not set"
     exit 1
@@ -125,10 +94,9 @@ if [ "${GUIDANCE}" == "cfg" ]; then
       CKPT="${PWD}/outputs/qm9/ar_qed"
     elif [ "${MODEL}" = "mdlm" ]; then
       if (( CORRECTOR_STEPS > 0 )); then
-        CKPT="${PWD}/outputs/qm9/corrector_qed_v${VERSION}"
+        CKPT="${PWD}/outputs/qm9/corrector_qed"
       else
-#        CKPT="${PWD}/outputs/qm9/mdlm_qed"
-        CKPT="${PWD}/outputs/qm9/corrector_qed_v${VERSION}"
+        CKPT="${PWD}/outputs/qm9/corrector_qed"
       fi
     elif [ "${MODEL}" = "udlm" ]; then
       CKPT="${PWD}/outputs/qm9/udlm_qed"
@@ -138,10 +106,9 @@ if [ "${GUIDANCE}" == "cfg" ]; then
       CKPT="${PWD}/outputs/qm9/ar_ring_count"
     elif [ "${MODEL}" = "mdlm" ]; then
       if (( CORRECTOR_STEPS > 0 )); then
-        CKPT="${PWD}/outputs/qm9/corrector_ring_count_v${VERSION}"
+        CKPT="${PWD}/outputs/qm9/corrector_ring_count"
       else
-        CKPT="${PWD}/outputs/qm9/corrector_ring_count_v${VERSION}"
-#        CKPT="${PWD}/outputs/qm9/mdlm_ring_count"
+        CKPT="${PWD}/outputs/qm9/corrector_ring_count"
       fi
     elif [ "${MODEL}" = "udlm" ]; then
       CKPT="${PWD}/outputs/qm9/udlm_ring_count"
@@ -159,11 +126,7 @@ if [ "${GUIDANCE}" == "cfg" ]; then
   guidance_args="${guidance_args} guidance.gamma=${GAMMA}"
   results_csv_path="${CKPT}/qm9-eval_param-${parameterization}_${GUIDANCE}_${PROP}_T-${SAMPLING_STEPS}_C-${CORRECTOR_SAMPLING}_CT-${CORRECTOR_STEPS}_CN-${CORRECTOR_EVERY_N_STEPS}_gamma-${GAMMA}_seed-${SEED}_ckpt-${CKPT_FILE}.csv"
   generated_seqs_path="${CKPT}/samples-qm9-eval_param-${parameterization}_${GUIDANCE}_${PROP}_T-${SAMPLING_STEPS}_C-${CORRECTOR_SAMPLING}_CT-${CORRECTOR_STEPS}_CN-${CORRECTOR_EVERY_N_STEPS}_gamma-${GAMMA}_seed-${SEED}_ckpt-${CKPT_FILE}.json"
-###### FUDGE / CBG ######
 elif [ "${GUIDANCE}" = "fudge" ] || [ "${GUIDANCE}" = "cbg" ]; then
-  # Expecting:
-  #  - GAMMA
-  #  - USE_APPROX (for cbg)
   if [ -z "${GAMMA}" ]; then
     echo "GAMMA is not set"
     exit 1
@@ -172,17 +135,17 @@ elif [ "${GUIDANCE}" = "fudge" ] || [ "${GUIDANCE}" = "cbg" ]; then
     if [ "${MODEL}" = "ar" ]; then
       CLASS_CKPT="${PWD}/outputs/qm9/fudge_classifier/qed"
     elif [ "${MODEL}" = "mdlm" ]; then
-      CLASS_CKPT="${PWD}/outputs/qm9/classifier/qed_absorbing_state_T-0_v2"
+      CLASS_CKPT="${PWD}/outputs/qm9/classifier/qed_absorbing_state_T-0"
     elif [ "${MODEL}" = "udlm" ]; then
-      CLASS_CKPT="${PWD}/outputs/qm9/classifier/qed_uniform_T-0_v2"
+      CLASS_CKPT="${PWD}/outputs/qm9/classifier/qed_uniform_T-0"
     fi
   elif [ "${PROP}" = "ring_count" ]; then
     if [ "${MODEL}" = "ar" ]; then
       CLASS_CKPT="${PWD}/outputs/qm9/fudge_classifier/ring_count"
     elif [ "${MODEL}" = "mdlm" ]; then
-      CLASS_CKPT="${PWD}/outputs/qm9/classifier/ring_count_absorbing_state_T-0_v2"
+      CLASS_CKPT="${PWD}/outputs/qm9/classifier/ring_count_absorbing_state_T-0"
     elif [ "${MODEL}" = "udlm" ]; then
-      CLASS_CKPT="${PWD}/outputs/qm9/classifier/ring_count_uniform_T-0_v2"
+      CLASS_CKPT="${PWD}/outputs/qm9/classifier/ring_count_uniform_T-0"
     fi
   else
     echo "Invalid PROP: ${PROP}"
@@ -190,7 +153,7 @@ elif [ "${GUIDANCE}" = "fudge" ] || [ "${GUIDANCE}" = "cbg" ]; then
   fi
   guidance_args="${guidance_args} classifier_model=tiny-classifier classifier_backbone=dit guidance.classifier_checkpoint_path=${CLASS_CKPT}/checkpoints/${CKPT_FILE}.ckpt guidance.gamma=${GAMMA}"
   if [ "${GUIDANCE}" = "fudge" ]; then
-    guidance_args="${guidance_args} guidance.topk=40 classifier_model.pooling=no_pooling"  # Use full vocab size for topk
+    guidance_args="${guidance_args} guidance.topk=40 classifier_model.pooling=no_pooling"
   fi
   if [ "${GUIDANCE}" = "cbg" ]; then
     if [ -z "${USE_APPROX}" ]; then
@@ -210,13 +173,8 @@ elif [ "${GUIDANCE}" = "fudge" ] || [ "${GUIDANCE}" = "cbg" ]; then
       subs_masking=True
     fi
   fi
-###### PPLM / NOS ######
 elif [ "${GUIDANCE}" = "pplm" ] || [ "${GUIDANCE}" = "nos" ]; then
   if [ "${GUIDANCE}" = "pplm" ]; then
-    # Expecting:
-    #  - NUM_PPLM_STEPS
-    #  - PPLM_STEP_SIZE
-    #  - PPLM_STABILITY_COEF
     if [ -z "${NUM_PPLM_STEPS}" ]; then
       echo "NUM_PPLM_STEPS is not set"
       exit 1
@@ -233,10 +191,6 @@ elif [ "${GUIDANCE}" = "pplm" ] || [ "${GUIDANCE}" = "nos" ]; then
     results_csv_path="${CKPT}/qm9-eval-${GUIDANCE}_${PROP}_T-${SAMPLING_STEPS}_NUM_PPLM_STEPS-${NUM_PPLM_STEPS}_PPLM_STEP_SIZE-${PPLM_STEP_SIZE}_PPLM_STABILITY_COEF-${PPLM_STABILITY_COEF}_seed-${SEED}.csv"
     generated_seqs_path="${CKPT}/samples_qm9-eval-${GUIDANCE}_${PROP}_T-${SAMPLING_STEPS}_NUM_PPLM_STEPS-${NUM_PPLM_STEPS}_PPLM_STEP_SIZE-${PPLM_STEP_SIZE}_PPLM_STABILITY_COEF-${PPLM_STABILITY_COEF}_seed-${SEED}.json"
   else
-    # Expecting:
-    #  - NUM_NOS_STEPS
-    #  - NOS_STEP_SIZE
-    #  - NOS_STABILITY_COEF
     if [ -z "${NUM_NOS_STEPS}" ]; then
       echo "NUM_NOS_STEPS is not set"
       exit 1
@@ -280,7 +234,6 @@ else
   exit 1
 fi
 
-# shellcheck disable=SC2086
 python -u guidance_eval/qm9_eval.py \
     hydra.output_subdir=null \
     hydra.run.dir="${CKPT}" \
@@ -311,4 +264,5 @@ python -u guidance_eval/qm9_eval.py \
     sampling.corrector_steps=${CORRECTOR_STEPS} \
     +eval.results_csv_path=${results_csv_path} \
     eval.generated_samples_path=${generated_seqs_path} \
+    wandb=null \
     ${guidance_args}

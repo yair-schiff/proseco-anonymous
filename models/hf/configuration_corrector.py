@@ -1,17 +1,12 @@
-"""PDLM config for Hugging Face.
-
-"""
-
 import transformers
 
 
-class ProsecoConfig(transformers.PretrainedConfig):
-  """Hugging Face configuration class for PDLM."""
-  model_type = "proseco"
+class CorrectorConfig(transformers.PretrainedConfig):
+  model_type = "corrector_model"
 
   def __init__(
     self,
-    vocab_size: int = 50258,  # `gpt2` vocab size (+1 for [MASK])
+    vocab_size: int = 50258,
     model_length: int = 1024,
     hidden_dim: int = 768,
     cond_dim: int = 128,
@@ -19,8 +14,8 @@ class ProsecoConfig(transformers.PretrainedConfig):
     n_heads: int = 12,
     dropout: float = 0.1,
     time_conditioning: bool = False,
-    cfg: bool = False,  # Whether model is used for Classifier-Free Guidance (CFG)
-    cfg_num_classes: int = -1,  # Number of classes for CFG (dummy value of -1 for no CFG)
+    cfg: bool = False,
+    cfg_num_classes: int = -1,
     ** kwargs):
     super().__init__(**kwargs)
     self.vocab_size = vocab_size

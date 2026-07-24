@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-# Flags required to enable jit fusion kernels
+
 torch._C._jit_set_profiling_mode(False)
 torch._C._jit_set_profiling_executor(False)
 torch._C._jit_override_can_fuse_on_cpu(True)
@@ -43,7 +43,6 @@ def get_bias_dropout_add_scale(training):
   return _bias_dropout_add
 
 
-# function overload
 def modulate(x: torch.Tensor,
              shift: torch.Tensor,
              scale: torch.Tensor) -> torch.Tensor:
@@ -98,10 +97,10 @@ class Rotary(torch.nn.Module):
       freqs = torch.einsum("i,j->ij", t,
                            self.inv_freq.clone())
       emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
-      # dims are: batch, seq_len, qkv, head, dim
+
       self.cos_cached = emb.cos()[None, :, None, None, :].repeat(1,1,3,1,1)
       self.sin_cached = emb.sin()[None, :, None, None, :].repeat(1,1,3,1,1)
-      # This makes the transformation on v an identity.
+
       self.cos_cached[:,:,2,:,:].fill_(1.)
       self.sin_cached[:,:,2,:,:].fill_(0.)
 
@@ -120,14 +119,11 @@ def apply_rotary_pos_emb(qkv, cos, sin):
                                                         cos,
                                                         sin)
 
-# function overload
+
 def modulate(x, shift, scale):
   return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
-############################################################
-#                        Layers                            #
-############################################################
 class LayerNorm(nn.Module):
   def __init__(self, dim):
     super().__init__()
@@ -140,7 +136,7 @@ class LayerNorm(nn.Module):
 
 
 def residual_linear(x, W, x_skip, residual_scale):
-  """x_skip + residual_scale * W @ x"""
+
   dim_out, dim_in = W.shape[0], W.shape[1]
   return torch.addmm(
     x_skip.view(-1, dim_out),
@@ -149,13 +145,9 @@ def residual_linear(x, W, x_skip, residual_scale):
     alpha=residual_scale).view(*x.shape[:-1], dim_out)
 
 
-############################################################
-#     Embedding Layers for Timesteps and Class Labels      #
-############################################################
 class TimestepEmbedder(nn.Module):
-  """
-  Embeds scalar timesteps into vector representations.
-  """
+
+
   def __init__(self, hidden_size,
                frequency_embedding_size=256):
     super().__init__()
@@ -168,16 +160,8 @@ class TimestepEmbedder(nn.Module):
 
   @staticmethod
   def timestep_embedding(t, dim, max_period=10000):
-    """
-    Create sinusoidal timestep embeddings.
-    :param t: a 1-D Tensor of N indices, 1 / batch element.
-                      These may be fractional.
-    :param dim: the dimension of the output.
-    :param max_period: controls the minimum frequency of the
-      embeddings.
-    :return: an (N, D) Tensor of positional embeddings.
-    """
-    # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
+
+
     half = dim // 2
     freqs = torch.exp(
       - math.log(max_period)
@@ -200,7 +184,7 @@ class TimestepEmbedder(nn.Module):
 
 
 class LabelEmbedder(nn.Module):
-  """Embeds class labels into vector representations."""
+
   def __init__(self, num_classes, cond_size):
     super().__init__()
     self.embedding_table = nn.Embedding(num_classes,
@@ -209,13 +193,8 @@ class LabelEmbedder(nn.Module):
 
   def forward(self, labels):
     embeddings = self.embedding_table(labels)
-    # embeddings = self.mlp(embeddings)
+
     return embeddings
-
-
-############################################################
-#                      Core Model                          #
-############################################################
 
 
 class DDiTBlock(nn.Module):
@@ -274,7 +253,7 @@ class DDiTBlock(nn.Module):
        shift_mlp, scale_mlp, gate_mlp) = (
         None, None, None, None, None, None)
 
-    # attention operation
+
     x_skip = x
     if self.use_adaLN:
       x = modulate_fused(self.norm1(x), shift_msa, scale_msa)
@@ -309,7 +288,7 @@ class DDiTBlock(nn.Module):
                               x_skip,
                               self.dropout)
 
-    # mlp operation
+
     x_skip = x
     if self.use_adaLN:
       x = modulate_fused(self.norm2(x), shift_mlp, scale_mlp)
@@ -374,16 +353,16 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
       config.model.hidden_size, vocab_size)
 
     if self.causal:
-      self.sigma_map = None  # no timestep embedding for AR
+      self.sigma_map = None
     else:
       self.sigma_map = TimestepEmbedder(config.model.cond_dim)
 
-    if (config.training.guidance is not None or  # Training for / using CFG
+    if (config.training.guidance is not None or
         (hasattr(config, 'guidance')
          and config.guidance is not None
          and config.guidance.method == 'cfg')):
       self.cond_map = LabelEmbedder(
-        config.data.num_classes + 1,  # +1 for mask
+        config.data.num_classes + 1,
         config.model.cond_dim)
     else:
       self.cond_map = None
@@ -434,7 +413,7 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
                          "but Model was not initialized "
                          "with condition embedding layer.")
       else:
-        if c is None:  # AR (self.causal is True)
+        if c is None:
           c = F.silu(self.cond_map(cond))
         else:
           c = c + F.silu(self.cond_map(cond))
@@ -509,9 +488,9 @@ class DITClassifier(nn.Module):
 
   def forward(self, indices_or_one_hots, sigma, x_emb=None, attention_mask=None):
     if x_emb is None:
-      if indices_or_one_hots.ndim == 2:  # indices (B, L)
+      if indices_or_one_hots.ndim == 2:
         x = self.vocab_embed(indices_or_one_hots)
-      else:  # one-hots (B, L, V)
+      else:
         x = F.linear(indices_or_one_hots.to(torch.float),
                      self.vocab_embed.embedding.T)
 
@@ -538,9 +517,9 @@ class DITClassifier(nn.Module):
         x = x[..., 0]
       elif self.pooling == 'last':
         x = x[..., -1]
-      elif self.pooling == 'no_pooling':  # for ar_fudge
+      elif self.pooling == 'no_pooling':
         pass
-      elif self.pooling == 'attention_mean':  # for ar_pplm
+      elif self.pooling == 'attention_mean':
         masked_x = x * attention_mask.unsqueeze(2)
         x = torch.sum(masked_x, dim=1) / (torch.sum(attention_mask, dim=1, keepdim=True) + 1e-15)
       else:

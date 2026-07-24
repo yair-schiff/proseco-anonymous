@@ -1,6 +1,2 @@
-"""Hugging Face config and model.
-
-"""
-
-from .configuration_proseco import ProsecoConfig
-from .modeling_proseco import Proseco
+from .configuration_corrector import CorrectorConfig
+from .modeling_corrector import CorrectorModel

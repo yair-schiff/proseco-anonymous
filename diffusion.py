@@ -1,7 +1,5 @@
-"""Module for modeling discrete diffusion
-  (absorbing state or uniform) and AR
-  (a special case of absorbing state).
-"""
+
+
 import itertools
 import math
 import typing
@@ -62,21 +60,15 @@ class NLL(torchmetrics.aggregation.MeanMetric):
 
 class BPD(NLL):
   def compute(self) -> Tensor:
-    """Computes the bits per dimension.
 
-    Returns:
-      bpd
-    """
+
     return self.mean_value / self.weight / LOG2
 
 
 class Perplexity(NLL):
   def compute(self) -> Tensor:
-    """Computes the Perplexity.
 
-    Returns:
-     Perplexity
-    """
+
     return torch.exp(self.mean_value / self.weight)
 
 
@@ -104,15 +96,14 @@ class Diffusion(L.LightningModule):
       else:
         self.mask_index = tokenizer.mask_token_id
 
-    # Note: creating limiting distribution with
-    #  broadcast-able batch and sequence dimensions.
+
     self.parameterization = config.parameterization
     self.diffusion = config.diffusion
     if config.parameterization == 'ar':
       self.limiting_distribution = None
     else:
       if self.diffusion == 'absorbing_state':
-        # Not needed, posterior calculated explicitly.
+
         limiting_distribution = None
       elif self.diffusion == 'uniform':
         limiting_distribution = torch.ones(
@@ -159,7 +150,7 @@ class Diffusion(L.LightningModule):
     else:
       self.ema = None
 
-    # metrics are automatically reset at end of epoch
+
     metrics = torchmetrics.MetricCollection({
       'nll': NLL(),
       'bpd': BPD(),
@@ -199,8 +190,8 @@ class Diffusion(L.LightningModule):
         list(checkpoint['state_dict'].values())[0].device)
     if self.ema:
       self.ema.load_state_dict(checkpoint['ema'])
-    # Copied from:
-    # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py#L41
+
+
     self.fast_forward_epochs = checkpoint['loops'][
       'fit_loop']['epoch_progress']['current']['completed']
     self.fast_forward_batches = checkpoint['loops'][
@@ -208,16 +199,13 @@ class Diffusion(L.LightningModule):
         'current']['completed']
 
   def on_save_checkpoint(self, checkpoint):
-    # Do not save this buffer
+
     checkpoint['state_dict'].pop('limiting_distribution',
                                  None)
     if self.ema:
       checkpoint['ema'] = self.ema.state_dict()
-    # Copied from:
-    # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/tasks/seq.py
-    # ['epoch_loop.batch_progress']['total']['completed'] is
-    #  1 iteration behind, so we're using the optimizer's
-    #  progress.
+
+
     checkpoint['loops']['fit_loop'][
       'epoch_loop.batch_progress']['total'][
         'completed'] = checkpoint['loops']['fit_loop'][
@@ -230,10 +218,8 @@ class Diffusion(L.LightningModule):
           'epoch_loop.automatic_optimization.optim_progress'][
             'optimizer']['step']['current'][
               'completed'] * self.trainer.accumulate_grad_batches
-    # _batches_that_stepped tracks the number of global
-    # steps, not the number of local steps, so we don't
-    # multiply with self.trainer.accumulate_grad_batches
-    # here.
+
+
     checkpoint['loops']['fit_loop'][
       'epoch_loop.state_dict'][
         '_batches_that_stepped'] = checkpoint['loops']['fit_loop'][
@@ -254,8 +240,8 @@ class Diffusion(L.LightningModule):
   def on_train_start(self):
     if self.ema:
       self.ema.move_shadow_params_to_device(self.device)
-    # Adapted from:
-    # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
+
+
     distributed = (
       self.trainer._accelerator_connector.use_distributed_sampler
       and self.trainer._accelerator_connector.is_distributed)
@@ -290,10 +276,6 @@ class Diffusion(L.LightningModule):
     self.trainer.fit_loop._combined_loader.flattened = updated_dls
 
   def configure_optimizers(self):
-    # TODO(yair): Lightning currently giving this warning when using `fp16`:
-    #  "Detected call of `lr_scheduler.step()` before `optimizer.step()`. "
-    #  Not clear if this is a problem or not.
-    #  See: https://github.com/Lightning-AI/pytorch-lightning/issues/5558
     optimizer = torch.optim.AdamW(
       itertools.chain(self.backbone.parameters(),
                       self.noise.parameters()),
@@ -321,21 +303,16 @@ class Diffusion(L.LightningModule):
         self.noise.parameters()))
 
   def _subs_parameterization(self, logits, xt):
-    # "Zero Masking Prob":
-    # log prob at the mask index = - infinity
+
+
     logits[..., self.mask_index] += self.neg_infinity
 
-    # "Copy over":
-    # Apply updates directly in the logits matrix.
-    # For the logits of the unmasked tokens, set all values
-    # to -infinity except for the indices corresponding to
-    # the unmasked tokens.
+
     unmasked_indices = (xt != self.mask_index)
     logits[unmasked_indices] = self.neg_infinity
     logits[unmasked_indices, xt[unmasked_indices]] = 0
 
-    # Normalize the logits such that x.exp() is
-    # a probability distribution over vocab_size.
+
     return logits.log_softmax(dim=-1)
 
   def _process_sigma(self, sigma):
@@ -350,7 +327,7 @@ class Diffusion(L.LightningModule):
     return sigma
 
   def forward(self, x, sigma, cond=None, x_emb=None, **kwargs):
-    """Returns log_probs / logits."""
+
     sigma = self._process_sigma(sigma)
     with torch.cuda.amp.autocast(dtype=torch.float32):
       if self.config.backbone == 'hf_dit':
@@ -359,28 +336,18 @@ class Diffusion(L.LightningModule):
         logits = self.backbone(x, sigma, cond, x_emb=x_emb, **kwargs)
 
     if self.parameterization == 'subs':
-      # returns log_probs
+
       return self._subs_parameterization(logits=logits, xt=x)
     if self.parameterization in {'ar', 'd3pm'}:
-      # returns log_probs
-      if self.subs_masking:  # Can use "zero masking prob"
+
+      if self.subs_masking:
         logits[:, :, self.mask_index] += self.neg_infinity
       return logits.log_softmax(dim=-1)
     return logits
 
   def _compute_posterior(self, x, xt, alpha_s, alpha_t):
-    """Computes the posterior / approximate posterior.
 
-    Args:
-      x: Either clean input `x0` (one-hot),
-        or model's predicted `x_theta` of shape (B, L, V).
-      xt: The noisy latent (as indices) of shape (B, L).
-      alpha_s: Noise level at s of shape (B, [L | 1], 1).
-      alpha_t: Noise level at t of shape (B, [L | 1], 1).
 
-    Returns:
-      Posterior / approximate posterior of shape (B, L, V).
-    """
     alpha_ts = alpha_t / alpha_s
     d_alpha = alpha_s - alpha_t
     xt_one_hot = F.one_hot(xt, self.vocab_size)
@@ -448,7 +415,7 @@ class Diffusion(L.LightningModule):
     return self.T * L_vb
 
   def _reconstruction_loss(self, x0, cond=None):
-    # For D3PM parameterization
+
     assert self.config.noise.type == 'loglinear', (
       'Reconstruction loss only implemented for log-linear '
       'noise.')
@@ -474,14 +441,8 @@ class Diffusion(L.LightningModule):
     return t
 
   def _q_xt(self, x, move_chance):
-    """Computes the noisy sample xt.
 
-    Args:
-      x: int torch.Tensor with shape (batch_size,
-          diffusion_model_input_length), input.
-      move_chance: float torch.Tensor with shape
-        (batch_size, 1).
-    """
+
     move_indices = torch.rand(
       *x.shape, device=x.device) < move_chance
     if self.diffusion == 'absorbing_state':
@@ -503,7 +464,7 @@ class Diffusion(L.LightningModule):
     if self.T > 0:
       t = (t * self.T).to(torch.int)
       t = t / self.T
-      # t \in {1/T, 2/T, ..., 1}
+
       t += (1 / self.T)
 
     sigma, dsigma = self.noise(t)
@@ -514,7 +475,7 @@ class Diffusion(L.LightningModule):
     model_output = self.forward(xt, time_conditioning,
                                 cond=cond)
 
-    # Discrete (finite T) time
+
     if self.T > 0:
       diffusion_loss = self._d3pm_loss(
         model_output=model_output, xt=xt, x0=x0, t=t)
@@ -545,7 +506,7 @@ class Diffusion(L.LightningModule):
         raise ValueError(
           f"Invalid parameterization: {self.parameterization} for T > 0.")
 
-    # Continuous (T --> infty) time
+
     if self.diffusion == 'absorbing_state':
       if (self.config.corrector_training
           and self.global_step >= self.config.corrector_training_start_step):
@@ -560,7 +521,7 @@ class Diffusion(L.LightningModule):
           0.
         )
 
-        # Corrector loss
+
         with torch.no_grad():
           if self.config.use_argmax_for_corrector:
             sampled_model_output = model_output.argmax(dim=-1).detach()
@@ -605,37 +566,34 @@ class Diffusion(L.LightningModule):
       assert self.config.noise.type == 'loglinear', (
         'Continuous time uniform diffusion only implemented'
         ' for log-linear noise.')
-      # TODO: Currently α_t' and α_t are hardcoded to a
-      #  log-linear noise.
-      #  Make generic (as above, for absorbing state):
-      #    alpha_t_prime =  -dsigma * (-sigma).exp()
-      #    alpha_t = (-sigma).exp()
-      alpha_t_prime = -1.
-      alpha_t = 1. - t[..., None, None]  # B, 1, 1
 
-      # x_bar = N * α_t * x + 1 - α_t ; B, L, V
+
+      alpha_t_prime = -1.
+      alpha_t = 1. - t[..., None, None]
+
+
       x_bar = self.vocab_size * alpha_t * F.one_hot(x0, self.vocab_size).float() + 1 - alpha_t
       x_bar_theta = self.vocab_size * alpha_t * model_output.exp() + 1 - alpha_t
 
-      # α_t' / (N*α_t)
-      coeff = alpha_t_prime / (self.vocab_size * alpha_t)  # B, 1, 1
 
-      # Term 1: indices where z_t = 1
-      x_bar_zt = torch.gather(x_bar, -1, xt[..., None])  # B, L, 1
-      x_bar_theta_zt = torch.gather(x_bar_theta, -1, xt[..., None])  # B, L, 1
-      term1 = ((self.vocab_size / x_bar_zt) - (self.vocab_size / x_bar_theta_zt))  # B, L, 1
+      coeff = alpha_t_prime / (self.vocab_size * alpha_t)
 
-      # Term 2: indices where z_t = 0
-      term2 = (  # B, L, V before summing --> B, L, 1 after
+
+      x_bar_zt = torch.gather(x_bar, -1, xt[..., None])
+      x_bar_theta_zt = torch.gather(x_bar_theta, -1, xt[..., None])
+      term1 = ((self.vocab_size / x_bar_zt) - (self.vocab_size / x_bar_theta_zt))
+
+
+      term2 = (
           (x_bar / x_bar_zt) *
           (
               x_bar_theta_zt.log() - x_bar_theta.log() +
               x_bar.log() - x_bar_zt.log()
           )
       )
-      term2 = term2.sum(dim=-1, keepdim=True)  # B, L, 1
+      term2 = term2.sum(dim=-1, keepdim=True)
 
-      diffusion_loss = (coeff * (term1 - term2)).squeeze()  # B, L
+      diffusion_loss = (coeff * (term1 - term2)).squeeze()
       reconstruction_loss = self._reconstruction_loss(
         x0, cond=cond)
       if self.training and self.config.training.use_simple_ce_loss:
@@ -662,16 +620,15 @@ class Diffusion(L.LightningModule):
     seqlen = x0.shape[1]
     if seqlen > self.config.model.length:
       assert seqlen == 2 * self.config.model.length
-      # cropping is necessary for the text8-crop dataset;
-      # try the same starting point for now
+
+
       start = np.random.choice(self.config.model.length)
       end = start + self.config.model.length
       input_tokens = x0[:, start: end]
       output_tokens = x0[:, start + 1: end + 1]
       new_attention_mask = attention_mask[:, start: end]
 
-      # Helps with validation PPL, since the val
-      # examples will all start and end with BOS/EOS
+
       input_tokens[:, 0] = self.tokenizer.bos_token_id
       output_tokens[:, -1] = self.tokenizer.eos_token_id
     elif self.parameterization == 'ar':
@@ -695,12 +652,12 @@ class Diffusion(L.LightningModule):
     if (cond is not None and self.training
         and self.config.training.guidance is not None
         and self.config.training.guidance.cond_dropout > 0):
-      # Randomly mask out conditioning for classifier-free
-      # guidance training.
+
+
       p = torch.bernoulli(
         torch.ones_like(cond) *
         self.config.training.guidance.cond_dropout).to(torch.bool)
-      # Use num_classes index as conditioning mask_token_id
+
       cond[p] = self.config.data.num_classes
 
     if self.parameterization == 'ar':
@@ -752,7 +709,7 @@ class Diffusion(L.LightningModule):
                   token_mask=attention_mask,
                   mdlm_loss=mdlm_token_loss,
                   corrector_loss=corrector_token_loss,
-                  corrector_nlls=corrector_nlls)  # type: ignore
+                  corrector_nlls=corrector_nlls)
 
     return Loss(loss=token_loss,
                 nlls=nlls,
@@ -764,7 +721,7 @@ class Diffusion(L.LightningModule):
     else:
       attention_mask = None
     cond = None
-    if (self.config.training.guidance is not None or  # Training for / using CFG
+    if (self.config.training.guidance is not None or
         (hasattr(self.config, 'guidance')
          and self.config.guidance is not None
          and self.config.guidance.method == 'cfg')):
@@ -892,7 +849,7 @@ class Diffusion(L.LightningModule):
       if self.config.is_vision:
         samples = []
         if self.config.training.guidance is not None:
-          # Generate one image per class (up to 10 images)
+
 
           guidance = {
             'method': 'cfg', 'condition': 0, 'gamma': 1.0}
@@ -903,7 +860,7 @@ class Diffusion(L.LightningModule):
             self.config.guidance.condition = i
             samples.append(self.sample()[0])
         else:
-          # Generate ten images
+
           for i in range(10):
             samples.append(self.sample()[0])
         image_samples = self.tokenizer.batch_decode(
@@ -926,7 +883,7 @@ class Diffusion(L.LightningModule):
             decoded_samples = self.tokenizer.batch_decode(
               samples)
             if hasattr(self.trainer.logger, 'log_table'):
-              # Log some generated samples
+
               self.trainer.logger.log_table(
                 key=f"samples@global_step{self.global_step}_class-{i}",
                 columns=['Generated Samples'],
@@ -937,7 +894,7 @@ class Diffusion(L.LightningModule):
           decoded_samples = self.tokenizer.batch_decode(
             samples)
           if hasattr(self.trainer.logger, 'log_table'):
-            # Log some generated samples
+
             self.trainer.logger.log_table(
               key=f"samples@global_step{self.global_step}",
               columns=['Generated Samples'],
@@ -965,18 +922,9 @@ class Diffusion(L.LightningModule):
     self,
     eps=1e-5,
     disable_pbar=False
-  ):  # Note: differs from self.config.training.sampling_eps
-    """Generate samples from (ema) model.
+  ):
 
-      Supports both AR and diffusion sampling.
-      Supports:
-        - standard decoding,
-        - classifier-free guidance,
-        - classifier-based guidance
-          - CBG / FUDGE,
-          - NOS / PPLM.
-    """
-    # WARNING: Lightning auto-casting is not working in this method.
+
     if not self.config.eval.disable_ema:
       self.load_ema_params()
     if getattr(self.config, 'guidance', None) is not None:
@@ -1001,7 +949,7 @@ class Diffusion(L.LightningModule):
       samples = self._ar_sample(
         classifier_model=classifier_model, cond=cond)
       NFEs_dict = {}
-    else:  # Diffusion sampling
+    else:
       samples, NFEs_dict = self._diffusion_sample(
         classifier_model=classifier_model, cond=cond,
         eps=eps, disable_pbar=disable_pbar)
@@ -1015,23 +963,23 @@ class Diffusion(L.LightningModule):
       classifier_model: typing.Optional[classifier.Classifier] = None,
       cond: typing.Optional[torch.tensor] = None,
   ):
-    # precompute token buffer
+
     num_pred_tokens = self.config.model.length - 1
     x = torch.zeros(
       (self.config.sampling.batch_size, num_pred_tokens + 1),
       dtype=torch.long,
       device=self.device)
     x[:, 0] = self.tokenizer.bos_token_id
-    # precompute Gumbel sampling noise
+
     if (getattr(self.config, 'guidance', None) is not None
         and self.config.guidance.method == 'fudge'):
       noise = torch.distributions.Gumbel(0, 1).sample(
-        (self.config.sampling.batch_size,  # type: ignore
+        (self.config.sampling.batch_size,
          num_pred_tokens,
          self.config.guidance.topk)).to(self.device)
     else:
       noise = torch.distributions.Gumbel(0, 1).sample(
-        (self.config.sampling.batch_size,  # type: ignore
+        (self.config.sampling.batch_size,
           num_pred_tokens,
           self.vocab_size)).to(self.device)
     if self.config.sampling.use_float64:
@@ -1042,9 +990,8 @@ class Diffusion(L.LightningModule):
       max_seqlen=num_pred_tokens,
       max_batch_size=x.shape[0],
       seqlen_offset=1)
-    # For cfg we do 2 forward passes, one for conditional
-    # model and one unconditional, so we need 2 copies of
-    # inference_params.
+
+
     uncond_inference_params = InferenceParams(
       max_seqlen=num_pred_tokens,
       max_batch_size=x.shape[0],
@@ -1120,7 +1067,7 @@ class Diffusion(L.LightningModule):
       i: int,
       **kwargs
   ) -> torch.tensor:
-    if self.config.guidance.gamma == 0.0:  # Sample unconditionally
+    if self.config.guidance.gamma == 0.0:
       mask_cond = (torch.ones_like(cond) *
                    self.config.data.num_classes)
       if self.config.backbone == 'dimamba':
@@ -1131,7 +1078,7 @@ class Diffusion(L.LightningModule):
       else:
         log_probs = self.forward(
           x[:, :i + 1],None, cond=mask_cond, **kwargs)
-    elif gamma == 1.0:  # Sample conditionally
+    elif gamma == 1.0:
       if self.config.backbone == 'dimamba':
         inference_params = kwargs.pop('inference_params')
         log_probs = self.forward(
@@ -1140,7 +1087,7 @@ class Diffusion(L.LightningModule):
       else:
         log_probs = self.forward(
           x[:, :i + 1], None, cond=cond, **kwargs)
-    else:  # Sample from tempered distribution
+    else:
         mask_cond = (torch.ones_like(cond) *
                      self.config.data.num_classes)
         if self.config.backbone == 'dimamba':
@@ -1158,7 +1105,7 @@ class Diffusion(L.LightningModule):
             x[:, :i + 1],None, cond=mask_cond, **kwargs)
 
         log_probs = gamma * log_probs_cond + (1 - gamma) * log_probs_uncond
-        # Gamma > 1.0 causes instability for Mamba, re-normalizing
+
         log_probs = log_probs.log_softmax(dim=-1)
     return log_probs[:, -1]
 
@@ -1179,7 +1126,7 @@ class Diffusion(L.LightningModule):
     t_candidates = torch.cat(
       [x[:, :i + 1].unsqueeze(1).expand(-1, topk, -1),
         top_indices.unsqueeze(2)],
-      dim=2).view(-1, i + 2)  # (B * K), L
+      dim=2).view(-1, i + 2)
 
     t = torch.zeros(t_candidates.shape[0],
                     device=self.device)
@@ -1189,7 +1136,7 @@ class Diffusion(L.LightningModule):
     classifier_log_prob = classifier_model.get_log_probs(
       t_candidates, time_conditioning)
     classifier_log_prob = classifier_log_prob[:, i + 1, :].view(
-      x.shape[0], topk, -1)[..., guidance_cond]  # (batch, topk)
+      x.shape[0], topk, -1)[..., guidance_cond]
     next_log_probs = (top_logits + gamma * classifier_log_prob).log_softmax(dim=-1)
     return next_log_probs, top_indices
 
@@ -1210,7 +1157,7 @@ class Diffusion(L.LightningModule):
     self,
     classifier_model: typing.Optional[classifier.Classifier] = None,
     cond: typing.Optional[torch.tensor] = None,
-    eps: float = 1e-5,  # Note: differs from self.config.training.sampling_eps
+    eps: float = 1e-5,
     disable_pbar: bool = False,
   ):
     xt = self._sample_prior(
@@ -1240,7 +1187,7 @@ class Diffusion(L.LightningModule):
     cache = None
     for i in pbar:
       t = timesteps[i]
-      if self.T > 0:  # t in {1/T,..., 1}, to match training
+      if self.T > 0:
         t = (t * self.T).to(torch.int)
         t = t / self.T
         t += (1 / self.T)
@@ -1354,12 +1301,12 @@ class Diffusion(L.LightningModule):
             corrector_move_chance_t=corrector_move_chance_t,
             corrector_move_chance_s=corrector_move_chance_s,
             corrector_cache=corrector_cache,
-            corrector_cond=corrector_cond  # For guidance, we force gamma = 1
+            corrector_cond=corrector_cond
           )
           corrector_log_x_theta = corrector_cache['corrector_log_x_theta']
           if (not self.config.sampling.use_cache or
             not torch.allclose(corrector_xs, corrector_xt)):
-            # Disable caching
+
             corrector_cache = None
           corrector_xt = corrector_xs
           corrector_pbar.set_postfix(**NFEs_dict,
@@ -1369,11 +1316,10 @@ class Diffusion(L.LightningModule):
             **NFEs_dict,
             prob_check=(corrector_q_xs.sum() / xt.numel()).item(),
             nan_check=bool(corrector_q_xs.isnan().sum() > 0))
-        # Replace unmasked positions with corrector_xt
+
         xt = torch.where((xt != self.mask_index).to(torch.bool), corrector_xt, xt)
-        # Sample from MDLM:
-        #   passing in the cache with corrector log_x_theta, ensure we only sample,
-        #   no additional NFE will occur.
+
+
         cache[cache_key] = corrector_log_x_theta
         if (getattr(self.config, "guidance", None) is not None
             and self.config.guidance.method == 'cbg'):
@@ -1393,7 +1339,7 @@ class Diffusion(L.LightningModule):
             time_conditioning=sigma_t,
             move_chance_t=move_chance_t,
             move_chance_s=move_chance_s,
-            # Use corrector_log_x_theta to sample from MDLM posterior
+
             cache={'log_x_theta': corrector_log_x_theta}
           )
         pbar.set_postfix(
@@ -1403,7 +1349,7 @@ class Diffusion(L.LightningModule):
           mask_frac=f"{((xt == self.mask_index).sum() / xt.numel()).item():0.3f}",
         )
       if not self.config.sampling.use_cache or not torch.allclose(xs, xt):
-        # Disable caching
+
         cache = None
       xt = xs
     return xt, NFEs_dict
@@ -1439,19 +1385,19 @@ class Diffusion(L.LightningModule):
       nucleus_probs /= nucleus_probs.sum(dim=-1, keepdim=True)
       corrector_x_theta = torch.zeros_like(corrector_x_theta).scatter_(
         -1, sorted_indices, nucleus_probs)
-      # Free up space
+
       del sorted_probs, sorted_indices, cumulative_probs, top_p_mask, nucleus_probs
-    if self.config.sampling.corrector_sampling == 'argmax':  # Argmax from x_theta
+    if self.config.sampling.corrector_sampling == 'argmax':
       corrector_q_xs = corrector_x_theta
       corrector_xs = corrector_x_theta.argmax(dim=-1)
-    elif self.config.sampling.corrector_sampling == 'sample':  # Sample for x_theta
+    elif self.config.sampling.corrector_sampling == 'sample':
       corrector_q_xs = corrector_x_theta
       corrector_xs = _sample_categorical(corrector_q_xs)
     elif self.config.sampling.corrector_sampling == 'select_top_k':
       assert self.config.sampling.corrector_top_k > 0
       corrector_q_xs = corrector_x_theta
       corrector_x_argmax = torch.argmax(corrector_x_theta, dim=-1)
-      corrector_x_argmax_p = torch.where(  # only consider 'update-able' positions
+      corrector_x_argmax_p = torch.where(
         corrector_x_argmax == corrector_xt,
         self.neg_infinity,
         torch.gather(
@@ -1468,7 +1414,7 @@ class Diffusion(L.LightningModule):
       transfer_int = torch.zeros(
         bsz, seq_len, device=corrector_x_argmax_p.device, dtype=torch.int8)
       transfer_int = transfer_int.scatter(1, idx, select_sorted.to(torch.int8))
-      transfer_index = transfer_int.bool()  # ensure we never select unmasked
+      transfer_index = transfer_int.bool()
       corrector_xs = corrector_xt.clone()
       corrector_xs[transfer_index] = corrector_x_argmax[transfer_index]
     else:
@@ -1484,7 +1430,7 @@ class Diffusion(L.LightningModule):
     move_chance_s: torch.Tensor,
     cache: typing.Optional[typing.Dict[str, torch.Tensor]] = None,
   ) -> typing.Tuple[torch.Tensor, torch.Tensor, typing.Dict[str, torch.Tensor]]:
-    # Compute x_theta
+
     if cache is not None:
       log_x_theta = cache['log_x_theta']
     else:
@@ -1501,9 +1447,9 @@ class Diffusion(L.LightningModule):
       nucleus_probs = sorted_probs * top_p_mask
       nucleus_probs /= nucleus_probs.sum(dim=-1, keepdim=True)
       x_theta = torch.zeros_like(x_theta).scatter_(-1, sorted_indices, nucleus_probs)
-      # Free up space
+
       del sorted_probs, sorted_indices, cumulative_probs, top_p_mask, nucleus_probs
-    # Compute posterior
+
     if self.diffusion == 'absorbing_state':
       q_xs = x_theta * (move_chance_t - move_chance_s)
       q_xs[:, :, self.mask_index] = move_chance_s[:, :, 0]
@@ -1518,7 +1464,7 @@ class Diffusion(L.LightningModule):
       raise NotImplementedError(
         f"Diffusion type {self.diffusion} not implemented.")
 
-    # Sample from posterior
+
     xs = _sample_categorical(q_xs)
     if self.diffusion == 'absorbing_state':
       copy_flag = (xt != self.mask_index).to(torch.bool)
@@ -1539,22 +1485,22 @@ class Diffusion(L.LightningModule):
       cache: typing.Optional[typing.Dict[str, torch.Tensor]] = None,
   ) -> typing.Tuple[torch.Tensor, torch.Tensor, typing.Dict[str, torch.Tensor]]:
 
-    # Compute log_x_theta
+
     if cache is not None:
       log_x_theta_uncond = cache['log_x_theta_uncond']
       log_x_theta_cond = cache['log_x_theta_cond']
     else:
-      if gamma == 0.0:  # Sample unconditionally
+      if gamma == 0.0:
         mask_cond = (torch.ones_like(cond) *
                      self.config.data.num_classes)
         log_x_theta_uncond = self.forward(
           xt, time_conditioning, cond=mask_cond)
         log_x_theta_cond = None
-      elif gamma == 1.0:  # Sample conditionally
+      elif gamma == 1.0:
         log_x_theta_cond = self.forward(xt, time_conditioning,
                                      cond=cond)
         log_x_theta_uncond = None
-      else:  # Sample from tempered distribution
+      else:
         log_x_theta_cond = self.forward(xt, time_conditioning,
                                      cond=cond)
         mask_cond = (torch.ones_like(cond) *
@@ -1562,9 +1508,9 @@ class Diffusion(L.LightningModule):
         log_x_theta_uncond = self.forward(xt,
                                        time_conditioning,
                                        cond=mask_cond)
-    # Compute (weighted) posterior
-    if (log_x_theta_cond is None  # gamma == 0
-        or log_x_theta_uncond is None):  # or gamma == 1
+
+    if (log_x_theta_cond is None
+        or log_x_theta_uncond is None):
       log_x_theta = log_x_theta_uncond if log_x_theta_uncond is not None else log_x_theta_cond
       x_theta = log_x_theta.exp()
       if self.diffusion == 'absorbing_state':
@@ -1580,7 +1526,7 @@ class Diffusion(L.LightningModule):
       else:
         raise NotImplementedError(
           f"Diffusion type {self.diffusion} not implemented.")
-    else:  # gamma != 0 and gamma != 1
+    else:
       if self.diffusion == 'absorbing_state':
         log_x_theta = (gamma * log_x_theta_cond + (1 - gamma) * log_x_theta_uncond)
         x_theta = log_x_theta.softmax(dim=-1)
@@ -1606,7 +1552,7 @@ class Diffusion(L.LightningModule):
         raise NotImplementedError(
           f"Diffusion type {self.diffusion} not implemented.")
 
-    # Sample from posterior
+
     xs = _sample_categorical(q_xs)
     if self.diffusion == 'absorbing_state':
       copy_flag = (xt != self.mask_index).to(torch.bool)
@@ -1626,20 +1572,20 @@ class Diffusion(L.LightningModule):
       time_conditioning: torch.tensor,
       move_chance_t: torch.tensor,
       move_chance_s: torch.tensor,
-      use_approx: bool = False,  # whether to use first-order approximation
+      use_approx: bool = False,
       cache: typing.Optional[typing.Dict[str, torch.Tensor]] = None,
   ) -> typing.Tuple[torch.tensor, torch.tensor, typing.Dict[str, torch.tensor]]:
 
     if cache is not None and 'log_x_theta' in cache:
       log_x_theta = cache['log_x_theta']
     else:
-      # Diffusion model
+
       log_x_theta = self.forward(xt, time_conditioning,
                                  cond=None)
     if cache is not None and 'classifier_log_prob' in cache:
       classifier_log_prob = cache['classifier_log_prob']
     else:
-      # Classifier model
+
       if use_approx:
         xt_one_hot = torch.nn.functional.one_hot(
           xt, self.vocab_size).to(torch.float)
@@ -1658,44 +1604,39 @@ class Diffusion(L.LightningModule):
             classifier_log_prob_xt[..., conditioning_class][..., None, None]
         ).detach().requires_grad_(False)
       else:
-        # Copied from https://github.com/hnisonoff/discrete_guidance/blob/main/src/fm_utils.py#L441
+
         bsz, seq_len = xt.shape
-        # Create bsz*seq_len*N copies of input sequences
-        # Shape: (bsz, 1, seq_len) -> (bsz, seq_len*N, seq_len)
-        # (where N = vocab_size).
+
+
         xt_expand = xt.unsqueeze(1).repeat(1, seq_len * self.vocab_size, 1)
-        # Flatten batch and transition dimensions
-        # Shape: (bsz, seq_len*N, seq_len) -> (bsz*seq_len*N, seq_len)
+
+
         xt_expand = xt_expand.view(-1, seq_len)
 
-        # Create indices for all possible transitions
-        # Shape: (seq_len*N,) -> (bsz, seq_len*N) -> (bsz*seq_len*N,)
+
         jump_idx = torch.arange(seq_len * self.vocab_size).to(xt.device)
         jump_idx = jump_idx.repeat(bsz, 1).flatten()
 
-        # Create tensor for states after one transition
+
         xt_jumps = xt_expand.clone()
 
-        # Calculate which dimension changes for each transition
-        # Shape: (bsz*seq_len*N,)
+
         jump_dims = jump_idx // self.vocab_size
 
-        # Calculate new value for changed dimension
-        # Shape: (bsz*seq_len*N,)
+
         jump_states = jump_idx % self.vocab_size
 
-        # Apply transitions by assigning new values at transition dimensions
-        # Shape: (bsz*seq_len*N, seq_len)
+
         xt_jumps[
           torch.arange(jump_idx.size(0), device=xt.device),
-          jump_dims,  # Index the transitioned dimension
-        ] = jump_states  # Assign the new state
+          jump_dims,
+        ] = jump_states
 
         classifier_log_prob = classifier_model.get_log_probs(
           xt_jumps, time_conditioning.repeat(seq_len * self.vocab_size)
         )[..., conditioning_class].reshape(bsz, seq_len, self.vocab_size)
 
-    # Compute unguided posterior
+
     if self.diffusion == 'absorbing_state':
       diffusion_log_probs = log_x_theta + torch.log(
         1. - (move_chance_s / move_chance_t))
@@ -1712,7 +1653,7 @@ class Diffusion(L.LightningModule):
       raise NotImplementedError(
         f"Diffusion type {self.diffusion} not implemented.")
 
-    # Apply guidance
+
     with torch.no_grad():
       if self.diffusion == 'absorbing_state':
         guided_log_probs = (gamma * classifier_log_prob) + diffusion_log_probs
@@ -1726,7 +1667,7 @@ class Diffusion(L.LightningModule):
           f"Diffusion type {self.diffusion} not implemented.")
 
     guided_probs = guided_log_probs.softmax(dim=-1)
-    # Sample from guided posterior
+
     xs = _sample_categorical(guided_probs)
     if self.diffusion == 'absorbing_state':
       xs = torch.where(copy_flag.to(bool), xt, xs)
@@ -1745,7 +1686,7 @@ class Diffusion(L.LightningModule):
       move_chance_t: torch.tensor,
       move_chance_s: torch.tensor,
   ) -> typing.Tuple[torch.tensor, torch.tensor, None]:
-    # Compute original diffusion_log_probs and hidden states
+
     copy_flag = (xt != self.mask_index).to(torch.bool)
     with torch.no_grad():
       time_conditioning = self._process_sigma(time_conditioning)
@@ -1757,8 +1698,8 @@ class Diffusion(L.LightningModule):
           log_x_theta = self._subs_parameterization(
             logits=logits, xt=xt)
         elif self.parameterization == 'd3pm':
-          # returns log_probs
-          if self.subs_masking:  # Can use "zero masking prob"
+
+          if self.subs_masking:
             logits[:, :, self.mask_index] += self.neg_infinity
           log_x_theta = logits.log_softmax(dim=-1)
         else:
@@ -1778,7 +1719,7 @@ class Diffusion(L.LightningModule):
             alpha_s=1 - move_chance_s,
             alpha_t=1 - move_chance_t).log()
 
-    # Perform NOS steps
+
     kl_loss = torch.nn.KLDivLoss(reduction='batchmean',
                                  log_target=True)
     delta = torch.nn.Parameter(

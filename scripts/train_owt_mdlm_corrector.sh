@@ -1,25 +1,20 @@
 #!/bin/bash
-#SBATCH -o ../watch_folder/%x_%j.out  # output file (%j expands to jobID)
-#SBATCH -N 1                          # Total number of nodes requested
-#SBATCH --get-user-env                # retrieve the users login environment
-#SBATCH --mem=32000                   # server memory requested (per node)
-#SBATCH -t 96:00:00                    # Time limit (hh:mm:ss)
-#SBATCH --partition=kuleshov,gpu      #
-#SBATCH --constraint="[h200|h100|a100|a6000|a5000]"
+#SBATCH -o ../watch_folder/%x_%j.out
+#SBATCH -N 1
+#SBATCH --get-user-env
+#SBATCH --mem=32000
+#SBATCH -t 96:00:00
 #SBATCH --ntasks-per-node=8
-#SBATCH --gres=gpu:8                  # Type/number of GPUs needed
-#SBATCH --open-mode=append            # Do not overwrite logs
-#SBATCH --requeue                     # Requeue upon preemption
+#SBATCH --gres=gpu:8
+#SBATCH --open-mode=append
+#SBATCH --requeue
 
-# Setup environment
-cd ../ || exit  # Go to the root directory of the repo
+cd ../ || exit
 source setup_env.sh || exit
 export HYDRA_FULL_ERROR=1
 
-# Network settings
 export NCCL_IB_SL="${NCCL_IB_SL:-1}"
 
-# export NCCL_DEBUG="${NCCL_DEBUG:-OFF}"
 export NCCL_DEBUG=OFF
 export NCCL_P2P_LEVEL=NVL
 
@@ -28,13 +23,12 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}"
 export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 export MASTER_PORT="${MASTER_PORT:-25001}"
 
-# Node settings
 export NUM_NODES="${SLURM_JOB_NUM_NODES:-1}"
 export CURRENT_RANK="${SLURM_PROCID:-0}"
 export NPROC="${NPROC:-${SLURM_JOB_NUM_NODES}}"
 
-RUN_NAME="owt_mdlm_corrector"
-DATA_CACHE_DIR="<DATA_CACHE_DIR>"  # TODO: Set this
+RUN_NAME="${RUN_NAME:-training_run}"
+DATA_CACHE_DIR="${DATA_CACHE_DIR:-${PWD}/.data_cache}"
 RUN_DIR="${PWD}/outputs/owt/${RUN_NAME}"
 mkdir -p "${RUN_DIR}/checkpoints"
 
@@ -52,9 +46,6 @@ MDLM_LOSS_WEIGHT=1.0
 CORRECTOR_LOSS_WEIGHT=1.0
 CORRECTOR_LOSS_ERRORS_UPWEIGHTED=True
 SAMPLING_EPS_TRAINING=1e-1
-
-
-# To enable preemption re-loading, set `hydra.run.dir` or
 torchrun --nnodes=$NUM_NODES --nproc_per_node=$NPROC --master_port=$MASTER_PORT --master_addr $MASTER_ADDR --node_rank=$CURRENT_RANK main.py \
   corrector_training=True \
   use_model_outputs_as_corrector_input=${USE_MODEL_OUTPUTS_AS_CORRECTOR_INPUT} \
@@ -86,5 +77,5 @@ torchrun --nnodes=$NUM_NODES --nproc_per_node=$NPROC --master_port=$MASTER_PORT 
   eval.generate_samples=False \
   trainer.num_nodes=${NUM_NODES} \
   trainer.devices=${NPROC} \
-  wandb.name=${RUN_NAME} \
+  wandb=null \
   hydra.run.dir=${RUN_DIR}

@@ -3,7 +3,7 @@ import abc
 import torch
 import torch.nn as nn
 
-# Flags required to enable jit fusion kernels
+
 torch._C._jit_set_profiling_mode(False)
 torch._C._jit_set_profiling_executor(False)
 torch._C._jit_override_can_fuse_on_cpu(True)
@@ -37,28 +37,22 @@ def binary_discretization(z):
 
 
 class Noise(abc.ABC, nn.Module):
-  """
-  Base Noise class.
 
-  Defines forward signature, which returns:
-  total and rate of noise for a given timestep.
-  """
+
   def forward(self, t):
-    # Assume time goes from 0 to 1
+
     return self.total_noise(t), self.rate_noise(t)
   
   @abc.abstractmethod
   def rate_noise(self, t):
-    """
-    Rate of change of noise, i.e. g(t)
-    """
+
+
     pass
 
   @abc.abstractmethod
   def total_noise(self, t):
-    """
-    Total noise ie \int_0^t g(t) dt + g(0)
-    """
+
+
     pass
 
 
@@ -132,13 +126,8 @@ class GeometricNoise(Noise):
 
 
 class LogLinearNoise(Noise):
-  """Log Linear noise schedule.
-  
-  Built such that 1 - 1/e^(n(t)) interpolates between 0 and
-  ~1 when t varies from 0 to 1. Total noise is
-  -log(1 - (1 - eps) * t), so the sigma will be
-  (1 - eps) * t.
-  """
+
+
   def __init__(self, eps=1e-3):
     super().__init__()
     self.eps = eps

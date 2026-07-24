@@ -10,32 +10,29 @@ from einops import rearrange
 from .dit import LabelEmbedder
 
 
-# From https://github.com/yang-song/score_sde_pytorch/ which is from
-#  https://github.com/hojonathanho/diffusion/blob/master/diffusion_tf/nn.py
 def transformer_timestep_embedding(timesteps, embedding_dim, max_positions=10000):
-    assert len(timesteps.shape) == 1  # and timesteps.dtype == tf.int32
+    assert len(timesteps.shape) == 1
     half_dim = embedding_dim // 2
-    # magic number 10000 is from transformers
+
     emb = math.log(max_positions) / (half_dim - 1)
-    # emb = math.log(2.) / (half_dim - 1)
+
     emb = torch.exp(
         torch.arange(half_dim, dtype=torch.float32, device=timesteps.device) * -emb
     )
-    # emb = tf.range(num_embeddings, dtype=jnp.float32)[:, None] * emb[None, :]
-    # emb = tf.cast(timesteps, dtype=jnp.float32)[:, None] * emb[None, :]
+
+
     emb = timesteps.float()[:, None] * emb[None, :]
     emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
-    if embedding_dim % 2 == 1:  # zero pad
+    if embedding_dim % 2 == 1:
         emb = F.pad(emb, (0, 1), mode="constant")
     assert emb.shape == (timesteps.shape[0], embedding_dim)
     return emb
 
 
-# Code modified from https://github.com/yang-song/score_sde_pytorch
 def variance_scaling(
     scale, mode, distribution, in_axis=1, out_axis=0, dtype=torch.float32, device="cpu"
 ):
-    """Ported from JAX."""
+
 
     def _compute_fans(shape, in_axis=1, out_axis=0):
         receptive_field_size = np.prod(shape) / shape[in_axis] / shape[out_axis]
@@ -69,7 +66,7 @@ def variance_scaling(
 
 
 def default_init(scale=1.0):
-    """The same initialization used in DDPM."""
+
     scale = 1e-10 if scale == 0 else scale
     return variance_scaling(scale, "fan_avg", "uniform")
 
@@ -84,17 +81,17 @@ class NiN(nn.Module):
 
     def forward(
         self,
-        x,  #  ["batch", "in_ch", "H", "W"]
+        x,
     ):
         x = x.permute(0, 2, 3, 1)
-        # x (batch, H, W, in_ch)
+
         y = torch.einsum("bhwi,ik->bhwk", x, self.W) + self.b
-        # y (batch, H, W, out_ch)
+
         return y.permute(0, 3, 1, 2)
 
 
 class AttnBlock(nn.Module):
-    """Channel-wise self-attention block."""
+
 
     def __init__(self, channels, skip_rescale=True):
         super().__init__()
@@ -109,7 +106,7 @@ class AttnBlock(nn.Module):
 
     def forward(
         self,
-        x,  # ["batch", "channels", "H", "W"]
+        x,
     ):
         B, C, H, W = x.shape
         h = self.GroupNorm_0(x)
@@ -160,8 +157,8 @@ class ResBlock(nn.Module):
 
     def forward(
         self,
-        x,  # ["batch", "in_ch", "H", "W"]
-        temb=None,  #  ["batch", "temb_dim"]
+        x,
+        temb=None,
     ):
         assert x.shape[1] == self.in_ch
 
@@ -194,7 +191,7 @@ class Downsample(nn.Module):
 
     def forward(
         self,
-        x,  # ["batch", "ch", "inH", "inW"]
+        x,
     ):
         B, C, H, W = x.shape
         x = nn.functional.pad(x, (0, 1, 0, 1))
@@ -211,7 +208,7 @@ class Upsample(nn.Module):
 
     def forward(
         self,
-        x,  # ["batch", "ch", "inH", "inW"]
+        x,
     ):
         B, C, H, W = x.shape
         h = F.interpolate(x, (H * 2, W * 2), mode="nearest")
@@ -237,22 +234,22 @@ class UNet(nn.Module):
         self.data_min_max = [
             0,
             vocab_size,
-        ]  # config.model.data_min_max # tuple of min and max value of input so it can be rescaled to [-1, 1]
+        ]
         self.dropout = config.model.dropout
         self.skip_rescale = config.model.skip_rescale
         self.time_conditioning = (
             config.model.time_conditioning
-        )  # Whether to add in time embeddings
+        )
         self.time_scale_factor = (
             config.model.time_scale_factor
-        )  # scale to make the range of times be 0 to 1000
+        )
         self.time_embed_dim = config.model.time_embed_dim
         self.vocab_size = vocab_size
 
         self.size = config.model.size
         self.length = config.model.length
 
-        # truncated logistic
+
         self.fix_logistic = config.model.fix_logistic
 
         self.act = nn.functional.silu
@@ -283,7 +280,7 @@ class UNet(nn.Module):
         h_cs = [self.ch]
         in_ch = self.ch
 
-        # Downsampling
+
         self.downsampling_modules = []
 
         for scale_count in range(self.num_scales):
@@ -311,7 +308,7 @@ class UNet(nn.Module):
 
         self.downsampling_modules = nn.ModuleList(self.downsampling_modules)
 
-        # Middle
+
         self.middle_modules = []
 
         self.middle_modules.append(
@@ -335,7 +332,7 @@ class UNet(nn.Module):
         )
         self.middle_modules = nn.ModuleList(self.middle_modules)
 
-        # Upsampling
+
         self.upsampling_modules = []
 
         for scale_count in reversed(range(self.num_scales)):
@@ -363,7 +360,7 @@ class UNet(nn.Module):
 
         assert len(h_cs) == 0
 
-        # output
+
         self.output_modules = []
 
         self.output_modules.append(nn.GroupNorm(min(in_ch // 4, 32), in_ch, eps=1e-6))
@@ -375,7 +372,7 @@ class UNet(nn.Module):
 
         if config.training.guidance:
             self.cond_map = LabelEmbedder(
-                config.data.num_classes + 1,  # +1 for mask
+                config.data.num_classes + 1,
                 self.time_embed_dim * 4,
             )
         else:
@@ -384,8 +381,8 @@ class UNet(nn.Module):
     def _center_data(self, x):
         out = (x - self.data_min_max[0]) / (
             self.data_min_max[1] - self.data_min_max[0]
-        )  # [0, 1]
-        return 2 * out - 1  # to put it in [-1, 1]
+        )
+        return 2 * out - 1
 
     def _time_embedding(self, timesteps):
         if self.time_conditioning:
@@ -468,8 +465,8 @@ class UNet(nn.Module):
 
     def _logistic_output_res(
         self,
-        h,  #  ["B", "twoC", "H", "W"]
-        centered_x_in,  # ["B", "C", "H", "W"]
+        h,
+        centered_x_in,
     ):
         B, twoC, H, W = h.shape
         C = twoC // 2
@@ -477,10 +474,8 @@ class UNet(nn.Module):
         return h
 
     def _log_minus_exp(self, a, b, eps=1e-6):
-        """
-        Compute log (exp(a) - exp(b)) for (b<a)
-        From https://arxiv.org/pdf/2107.03006.pdf
-        """
+
+
         return a + torch.log1p(-torch.exp(b - a) + eps)
 
     def _truncated_logistic_output(self, net_out):
@@ -488,7 +483,7 @@ class UNet(nn.Module):
         C = 3
         S = self.vocab_size
 
-        # Truncated logistic output from https://arxiv.org/pdf/2107.03006.pdf
+
         mu = net_out[:, 0:C, :, :].unsqueeze(-1)
         log_scale = net_out[:, C:, :, :].unsqueeze(-1)
 
@@ -519,8 +514,8 @@ class UNet(nn.Module):
 
     def forward(
         self,
-        x,  # ["B", "C", "H", "W"]
-        timesteps=None,  # ["B"]
+        x,
+        timesteps=None,
         cond=None,
         x_emb=None,
     ):
@@ -552,15 +547,15 @@ class UNet(nn.Module):
 
         h = self._do_output(h)
 
-        # h (B, 2*C, H, W)
+
         h = self._logistic_output_res(h, centered_x_in)
-        h = self._truncated_logistic_output(h)  # (B, D, S)
+        h = self._truncated_logistic_output(h)
 
         return h
 
 
 class UNetConfig(transformers.PretrainedConfig):
-    """Hugging Face configuration class for MDLM."""
+
 
     model_type = "unet"
 
@@ -576,11 +571,11 @@ class UNetConfig(transformers.PretrainedConfig):
         data_min_max: list = [
             0,
             255,
-        ],  # tuple of min and max value of input so it can be rescaled to [-1, 1]
+        ],
         dropout: float = 0.1,
         skip_rescale: bool = True,
-        time_conditioning: bool = True,  # Whether to add in time embeddings
-        time_scale_factor: float = 1000,  # scale to make the range of times be 0 to 1000
+        time_conditioning: bool = True,
+        time_scale_factor: float = 1000,
         time_embed_dim: int = 128,
         fix_logistic: bool = False,
         vocab_size: int = 256,
@@ -588,7 +583,7 @@ class UNetConfig(transformers.PretrainedConfig):
         guidance_classifier_free: bool = False,
         guidance_num_classes: int = -1,
         cond_dim: int = -1,
-        length: int = 3072,  # 3x32x32
+        length: int = 3072,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -599,12 +594,12 @@ class UNetConfig(transformers.PretrainedConfig):
         self.input_channels = input_channels
         self.output_channels = vocab_size
         self.scale_count_to_put_attn = scale_count_to_put_attn
-        self.data_min_max = data_min_max  # tuple of min and max value of input so it can be rescaled to [-1, 1]
+        self.data_min_max = data_min_max
         self.dropout = dropout
         self.skip_rescale = skip_rescale
-        self.time_conditioning = time_conditioning  # Whether to add in time embeddings
+        self.time_conditioning = time_conditioning
         self.time_scale_factor = (
-            time_scale_factor  # scale to make the range of times be 0 to 1000
+            time_scale_factor
         )
         self.time_embed_dim = time_embed_dim
         self.fix_logistic = fix_logistic

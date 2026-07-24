@@ -1,6 +1,6 @@
 import json
 import os
-# import time
+
 import typing
 
 import datasets
@@ -39,12 +39,7 @@ omegaconf.OmegaConf.register_new_resolver(
 def _print_config(
     config: omegaconf.DictConfig,
     resolve: bool = True) -> None:
-  """Prints content of DictConfig using Rich library and its tree structure.
 
-  Args:
-    config (DictConfig): Configuration composed by Hydra.
-    resolve (bool): Whether to resolve reference fields of DictConfig.
-  """
 
   style = 'dim'
   tree = rich.tree.Tree('CONFIG', style=style,
@@ -78,7 +73,7 @@ def get_mol_property_fn(
 @hydra.main(version_base=None, config_path='../configs',
             config_name='config')
 def main(config: omegaconf.DictConfig) -> None:
-  # Reproducibility
+
   L.seed_everything(config.seed)
   os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
   torch.use_deterministic_algorithms(True)
@@ -88,7 +83,7 @@ def main(config: omegaconf.DictConfig) -> None:
   print(f"Checkpoint: {config.eval.checkpoint_path}")
 
   qm9_dataset = datasets.load_dataset(
-    'yairschiff/qm9', trust_remote_code=True,
+    config.data.dataset_name_or_path, trust_remote_code=True,
     split='train')
   tokenizer = dataloader.get_tokenizer(config)
   pretrained = diffusion.Diffusion.load_from_checkpoint(
@@ -135,9 +130,9 @@ def main(config: omegaconf.DictConfig) -> None:
   for _ in tqdm(
       range(config.sampling.num_sample_batches),
       desc='Gen. batches', leave=False):
-    # start = time.time()
+
     sample, NFEs_dict = pretrained.sample()
-    # print(f"Batch took {time.time() - start:.2f} seconds.")
+
     samples.extend(
       pretrained.tokenizer.batch_decode(sample))
     for k, v in NFEs_dict.items():
@@ -217,7 +212,7 @@ def main(config: omegaconf.DictConfig) -> None:
         f"{label_col}_valid": mol_property,
         f"{label_col}_novel": mol_property_novel,
       },
-      f, indent=4) # type: ignore
+      f, indent=4)
   results_df = pd.DataFrame.from_records(result_dicts)
   results_df.to_csv(config.eval.results_csv_path)
 

@@ -1,38 +1,4 @@
-# Copyright 2025 NVIDIA CORPORATION & AFFILIATES
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# SPDX-License-Identifier: Apache-2.0
 
-"""Evaluate a LLaDA + ProSeCo masked-diffusion model on nemo_skills benchmarks.
-
-This harness is an official implementation of ProSeCo that supports corrector-based
-diffusion sampling on gsm8k / human-eval / mbpp / hendrycks_math
-(and other nemo_skills benchmarks) with NFE and throughput tracking.
-
-Launch it with ``accelerate launch`` (see ``eval_llada.sh``); data is sharded
-across ranks and gathered on rank 0 for evaluation.
-
-Example:
-    accelerate launch llada/eval_llada.py \\
-        --benchmark human-eval \\
-        --prompt_config llada/prompt_configs/code.yaml \\
-        --model_path kuleshov-group/proseco-llada-sft \\
-        --tokenizer_path GSAI-ML/LLaDA-8B-Instruct \\
-        --gen_length 1024 --block_length 32 --steps 1024 \\
-        --apply_corrector_every_n_steps 2 --max_corrector_steps_per_loop 4 \\
-        --output_dir ./llada/outputs/humaneval
-"""
 
 import argparse
 import asyncio
@@ -68,12 +34,8 @@ def set_seed(seed):
 
 
 def _parse_generation_args(gen_args_str):
-    """Extract default prompt_config and eval_type from a benchmark's GENERATION_ARGS.
 
-    Dotted keys like ``eval_config.evalplus.dataset`` are expanded into nested
-    dicts so that downstream consumers (OmegaConf, dataclass configs) receive
-    properly structured config trees.
-    """
+
     result = {}
     for token in gen_args_str.split():
         if token.startswith("++") and "=" in token:
@@ -87,10 +49,8 @@ def _parse_generation_args(gen_args_str):
 
 
 def _load_benchmark_data(benchmark, split="test", data_dir=None):
-    """Load a nemo_skills benchmark dataset, preparing it on the fly if needed.
 
-    Returns (data_list, benchmark_defaults_dict, metrics_type_str).
-    """
+
     dataset_module, _ = get_dataset_module(benchmark, data_dir=data_dir)
 
     pkg_data_dir = Path(dataset_module.__file__).parent
@@ -107,7 +67,7 @@ def _load_benchmark_data(benchmark, split="test", data_dir=None):
     with open(data_file, "rt", encoding="utf-8") as f:
         for line in f:
             data.append(json.loads(line))
-    # Shuffling here to make sure all ranks get the same data so they will finish approximately at the same time
+
     random.Random(42).shuffle(data)
 
     defaults = _parse_generation_args(getattr(dataset_module, "GENERATION_ARGS", ""))
@@ -117,13 +77,7 @@ def _load_benchmark_data(benchmark, split="test", data_dir=None):
 
 
 def _load_model(model_path, tokenizer_path, device, world_size, torch_dtype=torch.bfloat16):
-    """Load a LLaDA-style HF model and tokenizer.
 
-    The model is a ``trust_remote_code`` checkpoint loaded with
-    ``AutoModel.from_pretrained``.  When running on more than one process, the
-    weights are placed directly on the local device via ``device_map`` so each
-    rank holds its own full copy of the model.
-    """
 
     model_kwargs = {}
     if world_size > 1:
@@ -148,14 +102,8 @@ def _load_model(model_path, tokenizer_path, device, world_size, torch_dtype=torc
 
 
 def _generate_batch(batch, prompt_builder, model, tokenizer, sampler_args, device, disable_pbar):
-    """Format prompts, run the proseco diffusion sampler, and decode a batch.
 
-    ``sampler_args`` are forwarded to ``generate`` (e.g. ``steps``,
-    ``gen_length``, ``block_length``, ``max_corrector_steps_per_loop``,
-    ``apply_corrector_every_n_steps``, ``threshold`` ...).  Prompts are
-    left-padded so the generated region starts at the same offset for every
-    sequence in the batch.
-    """
+
     batched_input_ids = []
     max_len = 0
 
@@ -194,7 +142,7 @@ def _generate_batch(batch, prompt_builder, model, tokenizer, sampler_args, devic
 
 
 def _evaluate_results(all_results, eval_type, eval_config, samples_file):
-    """Run nemo_skills evaluation on all results and rewrite the merged file."""
+
     eval_cfg = {**eval_config, "input_file": samples_file}
 
     if supports_single_eval(eval_type, eval_cfg):
@@ -214,21 +162,14 @@ def _evaluate_results(all_results, eval_type, eval_config, samples_file):
 
 
 def _compute_and_print_metrics(benchmark, metrics_type, samples_file):
-    """Compute metrics using nemo_skills."""
+
     compute = ComputeMetrics(benchmark=benchmark, metric_type=metrics_type)
     return compute.compute_metrics([samples_file])
 
 
 def _print_final_summary(title, metrics, extra_sections=None):
-    """Print a clear, formatted summary of evaluation results.
 
-    Args:
-        title: Header string displayed at the top of the summary.
-        metrics: Nested dict of ``{subset: {eval_mode: {metric: value}}}``.
-        extra_sections: Optional dict of ``{section_name: {key: value}}`` printed
-            after the metrics.  Values may be scalars or nested dicts (whose
-            entries are expanded with a ``key/subkey`` label).
-    """
+
     sep = "=" * 64
 
     print(f"\n{sep}")
@@ -288,10 +229,10 @@ def _optional_float(value):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Evaluate a LLaDA + ProSeCo diffusion model on nemo_skills benchmarks.",
+        description="Evaluate a LLaDA corrector model on nemo_skills benchmarks.",
     )
 
-    # dataset / evaluation
+
     parser.add_argument("--benchmark", default="human-eval", help="nemo_skills benchmark name (e.g. gsm8k, human-eval, mbpp).")
     parser.add_argument("--split", default="test")
     parser.add_argument("--data_dir", default=None, help="Optional nemo_skills dataset directory.")
@@ -299,23 +240,23 @@ def parse_args():
     parser.add_argument("--prompt_config", default=None, help="Override the benchmark's default nemo_skills prompt_config (name or yaml path).")
     parser.add_argument("--eval_type", default=None, help="Override the benchmark's default nemo_skills eval_type.")
 
-    # model
-    parser.add_argument("--model_path", required=True, help="HF model id / path (e.g. kuleshov-group/proseco-llada-sft).")
+
+    parser.add_argument("--model_path", required=True, help="HF model id / path.")
     parser.add_argument("--tokenizer_path", default=None, help="HF tokenizer id / path (defaults to --model_path).")
 
-    # runtime
+
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--nccl_timeout", type=int, default=30, help="NCCL timeout in minutes.")
 
-    # sampler (proseco generate) hyperparameters
+
     parser.add_argument("--steps", type=int, default=256)
     parser.add_argument("--gen_length", type=int, default=256)
     parser.add_argument("--block_length", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--remasking", default="low_confidence", choices=["low_confidence", "random"])
     parser.add_argument("--mask_id", type=int, default=126336)
-    parser.add_argument("--threshold", type=_optional_float, default=None, help="Confidence-threshold unmasking (fast-dLLM). None = fixed schedule.")
+    parser.add_argument("--threshold", type=_optional_float, default=None, help="Confidence-threshold unmasking. None = fixed schedule.")
     parser.add_argument("--max_corrector_steps_per_loop", type=int, default=0, help="Max corrector (fixed-point) iterations per step. 0 disables the corrector.")
     parser.add_argument("--apply_corrector_every_n_steps", type=int, default=1)
     parser.add_argument("--early_eos_stopping", type=_str2bool, default=True)
@@ -335,7 +276,7 @@ def main():
     world_size = state.num_processes
     device = f"cuda:{rank}" if torch.cuda.is_available() else "cpu"
 
-    # ── dataset & defaults – prepare on rank 0, then let others load ─────
+
     if rank == 0:
         data, benchmark_defaults, metrics_type = _load_benchmark_data(
             args.benchmark, split=args.split, data_dir=args.data_dir,
@@ -355,7 +296,7 @@ def main():
     eval_type = benchmark_defaults["eval_type"]
     eval_config = benchmark_defaults.get("eval_config", {})
 
-    # ── model & prompt builder ───────────────────────────────────────────
+
     model, tokenizer = _load_model(args.model_path, args.tokenizer_path, device, world_size)
     prompt_builder = get_prompt(prompt_config=prompt_config, tokenizer=tokenizer)
 
@@ -372,7 +313,7 @@ def main():
         early_eos_stopping=args.early_eos_stopping,
     )
 
-    # ── shard data across ranks ──────────────────────────────────────────
+
     chunk_size = (len(data) + world_size - 1) // world_size
     start_idx = rank * chunk_size
     end_idx = min(start_idx + chunk_size, len(data))
@@ -381,8 +322,7 @@ def main():
 
     results = []
 
-    # Synchronize all ranks and flush pending CUDA work so every rank starts
-    # timing from the same wall-clock moment.
+
     if torch.cuda.is_available():
         torch.cuda.synchronize(device)
     if world_size > 1:
@@ -412,7 +352,7 @@ def main():
             print(gen_output["texts"][0])
             print(f"{'=' * 60}\n")
 
-    # Wall-clock end measured after the slowest rank finishes all GPU work.
+
     if torch.cuda.is_available():
         torch.cuda.synchronize(device)
     if world_size > 1:
@@ -420,7 +360,7 @@ def main():
     end_time = time.time()
     gen_time = end_time - start_time
 
-    # ── gather results in memory via distributed collectives ─────────────
+
     if world_size > 1:
         gathered_results = [None] * world_size if rank == 0 else None
         torch.distributed.gather_object(results, gathered_results, dst=0)
@@ -432,7 +372,7 @@ def main():
     else:
         all_results = results
 
-    # ── rank 0: save, evaluate, metrics ──────────────────────────────────
+
     if rank == 0:
         all_results.sort(key=lambda x: x.get("_idx", 0))
         for r in all_results:

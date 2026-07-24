@@ -24,13 +24,13 @@ from transformers.modeling_outputs import (
 )
 
 try:
-  # Legacy mamba-ssm v1 file structure
+
   from mamba_ssm.ops.triton.layernorm import (
     RMSNorm, layer_norm_fn, rms_norm_fn
   )
 except ImportError:
   try:
-    # mamba-ssm v2 file structure
+
     from mamba_ssm.ops.triton.layer_norm import (
       RMSNorm, layer_norm_fn, rms_norm_fn
     )
@@ -64,7 +64,7 @@ class Mamba(nn.Module):
     dt_init_floor=1e-4,
     conv_bias=True,
     bias=False,
-    use_fast_path=True,  # Fused kernel options
+    use_fast_path=True,
     layer_idx=None,
     device=None,
     dtype=None,
@@ -104,7 +104,7 @@ class Mamba(nn.Module):
       self.dt_rank, self.d_inner,
       bias=True, **factory_kwargs)
 
-    # Initialize special dt projection to preserve variance at initialization
+
     dt_init_std = self.dt_rank**-0.5 * dt_scale
     if dt_init == 'constant':
       nn.init.constant_(self.dt_proj.weight, dt_init_std)
@@ -113,31 +113,31 @@ class Mamba(nn.Module):
     else:
       raise NotImplementedError
 
-    # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
+
     dt = torch.exp(
       torch.rand(self.d_inner, **factory_kwargs)
       * (math.log(dt_max) - math.log(dt_min))
       + math.log(dt_min)
     ).clamp(min=dt_init_floor)
-    # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
+
     inv_dt = dt + torch.log(-torch.expm1(-dt))
     with torch.no_grad():
       self.dt_proj.bias.copy_(inv_dt)
-    # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
+
     self.dt_proj.bias._no_reinit = True
 
-    # S4D real initialization
+
     A = repeat(
       torch.arange(1, self.d_state + 1, dtype=torch.float32, device=device),
       'n -> d n',
       d=self.d_inner,
     ).contiguous()
-    A_log = torch.log(A)  # Keep A_log in fp32
+    A_log = torch.log(A)
     self.A_log = nn.Parameter(A_log)
     self.A_log._no_weight_decay = True
 
-    # D 'skip' parameter
-    self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
+
+    self.D = nn.Parameter(torch.ones(self.d_inner, device=device))
     self.D._no_weight_decay = True
 
     self.out_proj = nn.Linear(
@@ -145,10 +145,8 @@ class Mamba(nn.Module):
     )
 
   def forward(self, hidden_states, inference_params=None):
-    """
-    hidden_states: (B, L, D)
-    Returns: same shape as hidden_states
-    """
+
+
     batch, seqlen, dim = hidden_states.shape
 
     conv_state, ssm_state = None, None
@@ -156,12 +154,12 @@ class Mamba(nn.Module):
       conv_state, ssm_state = self._get_states_from_cache(
         inference_params, batch)
       if inference_params.seqlen_offset > 0:
-        # The states are updated inplace
+
         out, _, _ = self.step(
           hidden_states, conv_state, ssm_state)
         return out
 
-    # We do matmul and transpose BLH -> HBL at the same time
+
     xz = rearrange(
       self.in_proj.weight @ rearrange(hidden_states, 'b l d -> d (b l)'),
       'd (b l) -> b d l',
@@ -170,14 +168,14 @@ class Mamba(nn.Module):
     if self.in_proj.bias is not None:
       xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), 'd -> d 1')
 
-    A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
-    # In the backward pass we write dx and dz next to each other to avoid torch.cat
+    A = -torch.exp(self.A_log.float())
+
 
     if (
       self.use_fast_path
       and causal_conv1d_fn is not None
       and inference_params is None
-    ):  # Doesn't support outputting the states
+    ):
       out = mamba_inner_fn(
         xz,
         self.conv1d.weight,
@@ -187,8 +185,8 @@ class Mamba(nn.Module):
         self.out_proj.weight,
         self.out_proj.bias,
         A,
-        None,  # input-dependent B
-        None,  # input-dependent C
+        None,
+        None,
         self.D.float(),
         delta_bias=self.dt_proj.bias.float(),
         delta_softplus=True,
@@ -196,13 +194,13 @@ class Mamba(nn.Module):
 
     else:
       x, z = xz.chunk(2, dim=1)
-      # Compute short convolution
+
       if conv_state is not None:
-        # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
-        # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
+
+
         conv_state.copy_(
             F.pad(x, (self.d_conv - x.shape[-1], 0))
-        )  # Update state (B D W)
+        )
       if causal_conv1d_fn is None:
         x = self.act(self.conv1d(x)[..., :seqlen])
       else:
@@ -214,10 +212,8 @@ class Mamba(nn.Module):
           activation=self.activation,
           state=conv_state,)
 
-      # We're careful here about the layout, to avoid extra transposes.
-      # We want dt to have d as the slowest moving dimension
-      # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
-      x_dbl = self.x_proj(rearrange(x, 'b d l -> (b l) d'))  # (bl d)
+
+      x_dbl = self.x_proj(rearrange(x, 'b d l -> (b l) d'))
       dt, B, C = torch.split(
         x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=-1
       )
@@ -254,18 +250,18 @@ class Mamba(nn.Module):
     assert (
       hidden_states.shape[1] == 1
     ), 'Only support decoding with 1 token at a time for now'
-    xz = self.in_proj(hidden_states.squeeze(1))  # (B 2D)
-    x, z = xz.chunk(2, dim=-1)  # (B D)
+    xz = self.in_proj(hidden_states.squeeze(1))
+    x, z = xz.chunk(2, dim=-1)
 
-    # Conv step
+
     if causal_conv1d_update is None:
       conv_state.copy_(
         torch.roll(conv_state, shifts=-1, dims=-1)
-      )  # Update state (B D W)
+      )
       conv_state[:, :, -1] = x
       x = torch.sum(
         conv_state * rearrange(self.conv1d.weight, 'd 1 w -> d w'), dim=-1
-      )  # (B D)
+      )
       if self.conv1d.bias is not None:
         x = x + self.conv1d.bias
       x = self.act(x).to(dtype=dtype)
@@ -278,22 +274,22 @@ class Mamba(nn.Module):
         self.activation,
       )
 
-    x_db = self.x_proj(x)  # (B dt_rank+2*d_state)
+    x_db = self.x_proj(x)
     dt, B, C = torch.split(x_db, [self.dt_rank, self.d_state, self.d_state], dim=-1)
-    # Don't add dt_bias here
-    dt = F.linear(dt, self.dt_proj.weight)  # (B d_inner)
-    A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
-    # SSM step
+    dt = F.linear(dt, self.dt_proj.weight)
+    A = -torch.exp(self.A_log.float())
+
+
     if selective_state_update is None:
-      # Discretize A and B
+
       dt = F.softplus(dt + self.dt_proj.bias.to(dtype=dt.dtype))
       dA = torch.exp(torch.einsum('bd,dn->bdn', dt, A))
       dB = torch.einsum('bd,bn->bdn', dt, B)
       ssm_state.copy_(ssm_state * dA + rearrange(x, 'b d -> b d 1') * dB)
       y = torch.einsum('bdn,bn->bd', ssm_state.to(dtype), C)
       y = y + self.D.to(dtype) * x
-      y = y * self.act(z)  # (B D)
+      y = y * self.act(z)
     else:
       y = selective_state_update(
         ssm_state,
@@ -322,7 +318,7 @@ class Mamba(nn.Module):
       dtype=conv_dtype,
     )
     ssm_dtype = self.dt_proj.weight.dtype if dtype is None else dtype
-    # ssm_dtype = torch.float32
+
     ssm_state = torch.zeros(
       batch_size,
       self.d_model * self.expand,
@@ -351,7 +347,7 @@ class Mamba(nn.Module):
         self.d_state,
         device=self.dt_proj.weight.device,
         dtype=self.dt_proj.weight.dtype,
-        # dtype=torch.float32,
+
       )
       inference_params.key_value_memory_dict[self.layer_idx] = (
         conv_state,
@@ -361,7 +357,7 @@ class Mamba(nn.Module):
       conv_state, ssm_state = inference_params.key_value_memory_dict[
         self.layer_idx
       ]
-      # TODO: What if batch size changes between generation, and we reuse the same states?
+
       if initialize_states:
         conv_state.zero_()
         ssm_state.zero_()
@@ -379,18 +375,8 @@ class Block(nn.Module):
     use_adaLN=False,
     cond_dim=0,
   ):
-    """
-    Simple block wrapping a mixer class with LayerNorm/RMSNorm and residual connection'
 
-    This Block has a slightly different structure compared to a regular
-    prenorm Transformer block.
-    The standard block is: LN -> MHA/MLP -> Add.
-    [Ref: https://arxiv.org/abs/2002.04745]
-    Here we have: Add -> LN -> Mixer, returning both
-    the hidden_states (output of the mixer) and the residual.
-    This is purely for performance reasons, as we can fuse add and LayerNorm.
-    The residual needs to be provided (except for the very first block).
-    """
+
     super().__init__()
     self.residual_in_fp32 = residual_in_fp32
     self.fused_add_norm = fused_add_norm
@@ -423,14 +409,8 @@ class Block(nn.Module):
     cond_embeds: Optional[Tensor] = None,
     inference_params: Optional[InferenceParams] = None,
   ):
-    r"""Pass the input through the encoder layer.
 
-    Args:
-      hidden_states: the sequence to the encoder layer (required).
-      residual: hidden_states = Mixer(LN(residual))
-      cond_embeds: conditional embeddings for modulation (optional).
-      inference_params: parameters for inference (optional).
-    """
+
     if not self.fused_add_norm:
       residual = (
         (hidden_states + residual)
@@ -489,13 +469,13 @@ class Block(nn.Module):
 
 
 class BiMambaConfig(PretrainedConfig):
-  """Config that extends the original MambaConfig with params relevant to bi-directionality."""
+
 
   model_type = 'bimamba'
 
   def __init__(
     self,
-    # From original MambaConfig
+
     d_model: int = 2560,
     n_layer: int = 64,
     vocab_size: int = 50277,
@@ -505,11 +485,11 @@ class BiMambaConfig(PretrainedConfig):
     fused_add_norm: bool = True,
     pad_vocab_size_multiple: int = 8,
     tie_word_embeddings: bool = True,
-    # Not in original MambaConfig, but default arg in create_block in mamba_ssm repo; used in layer norm
+
     norm_epsilon: float = 1e-5,
-    # Used in init_weights
+
     initializer_cfg: Optional[dict] = None,
-    # Caduceus-specific params
+
     bidirectional: bool = True,
     bidirectional_strategy: Union[str, None] = 'add',
     bidirectional_weight_tie: bool = True,
@@ -551,10 +531,8 @@ def create_block(
   use_adaLN=False,
   cond_dim=0,
 ):
-  """Create BiMamba block.
 
-  Adapted from: https://github.com/state-spaces/mamba/blob/main/mamba_ssm/models/mixer_seq_simple.py
-  """
+
   if ssm_cfg is None:
     ssm_cfg = {}
   factory_kwargs = {'device': device, 'dtype': dtype}
@@ -589,7 +567,7 @@ def create_block(
 
 
 class BiMambaWrapper(nn.Module):
-  """Thin wrapper around Mamba to support bi-directionality."""
+
 
   def __init__(
     self,
@@ -601,7 +579,7 @@ class BiMambaWrapper(nn.Module):
   ):
     super().__init__()
     if bidirectional and bidirectional_strategy is None:
-      bidirectional_strategy = 'add'  # Default strategy: `add`
+      bidirectional_strategy = 'add'
     if bidirectional and bidirectional_strategy not in ['add', 'ew_multiply']:
       raise NotImplementedError(
         f'`{bidirectional_strategy}` strategy for bi-directionality is not implemented!'
@@ -614,7 +592,7 @@ class BiMambaWrapper(nn.Module):
     self.mamba_rev = None
     if bidirectional:
       self.mamba_rev = Mamba(d_model=d_model, **mamba_kwargs)
-      if bidirectional_weight_tie:  # Tie in and out projections (where most of param count lies)
+      if bidirectional_weight_tie:
         self.mamba_rev.in_proj.weight = self.mamba_fwd.in_proj.weight
         self.mamba_rev.in_proj.bias = self.mamba_fwd.in_proj.bias
         self.mamba_rev.out_proj.weight = self.mamba_fwd.out_proj.weight
@@ -623,11 +601,7 @@ class BiMambaWrapper(nn.Module):
       self.mamba_rev = None
 
   def forward(self, hidden_states, inference_params=None):
-    """Bidirectional-enabled forward pass
 
-    hidden_states: (B, L, D)
-    Returns: same shape as hidden_states
-    """
 
     out = self.mamba_fwd(
     hidden_states, inference_params=inference_params,)
@@ -641,12 +615,12 @@ class BiMambaWrapper(nn.Module):
       hidden_states_flipped = torch.flip(hidden_states, dims=(1,))
 
       out_rev = self.mamba_rev(
-        hidden_states_flipped,  # Flip along the sequence length dimension
+        hidden_states_flipped,
         inference_params=inference_params,)
 
       out_rev_flipped = torch.flip(out_rev, dims=(1,))
       if self.bidirectional_strategy == 'add':
-        out = out + out_rev_flipped  # Flip back for combining with forward hidden states
+        out = out + out_rev_flipped
       elif self.bidirectional_strategy == 'ew_multiply':
         out = out * out_rev_flipped
       else:
@@ -682,9 +656,8 @@ class BiMambaEmbeddings(nn.Module):
     )
 
   def forward(self, input_ids):
-    """
-    input_ids: (batch, seqlen)
-    """
+
+
     return self.word_embeddings(input_ids)
 
 
@@ -707,11 +680,7 @@ class BiMambaMixerModel(nn.Module):
     self.embeddings = BiMambaEmbeddings(
       config, input_dim=input_dim, **factory_kwargs)
 
-    # Mamba changes the order of residual and layer norm:
-    # Instead of LN -> Attn / MLP -> Add, we do:
-    # Add -> LN -> Attn / MLP / Mixer, returning both the residual branch (output of Add) and
-    # the main branch (output of MLP / Mixer). The model definition is unchanged.
-    # This is for performance reason: we can fuse add + layer_norm.
+
     if config.fused_add_norm:
       if layer_norm_fn is None or rms_norm_fn is None:
         raise ImportError('Failed to import Triton LayerNorm / RMSNorm kernels')
@@ -759,15 +728,15 @@ class BiMambaMixerModel(nn.Module):
     inference_params: Optional[InferenceParams] = None
   ):
 
-    """Mixer forward."""
+
     all_hidden_states = []
     if hidden_states is None:
       if inputs_embeds is not None:
         hidden_states = inputs_embeds
       else:
-        if input_ids.ndim == 2:  # indices (B, L)
+        if input_ids.ndim == 2:
           hidden_states = self.embeddings(input_ids)
-        else:  # one-hots (B, L, V)
+        else:
           hidden_states = F.linear(
             input_ids.to(torch.float),
             self.embeddings.word_embeddings.weight.T)
@@ -776,7 +745,7 @@ class BiMambaMixerModel(nn.Module):
       for ind, layer in enumerate(self.layers):
         if output_hidden_states:
             all_hidden_states.append(hidden_states)
-        # TODO: Add support for gradient checkpointing
+
         layer_out = layer(
           hidden_states, residual,
           inference_params=inference_params,
@@ -803,7 +772,7 @@ class BiMambaMixerModel(nn.Module):
           rms_norm_fn if isinstance(self.norm_f, RMSNorm) else layer_norm_fn
         )
 
-        # Set prenorm=False here since we don't need the residual
+
         hidden_states = fused_add_norm_fn(
           hidden_states,
           self.norm_f.weight,
@@ -836,14 +805,14 @@ class BiMambaMixerModel(nn.Module):
 
 
 def cross_entropy(logits, y, ignore_index=-100):
-  """Cross-entropy loss."""
+
   logits = logits.view(-1, logits.shape[-1])
   y = y.view(-1)
   return F.cross_entropy(logits, y, ignore_index=ignore_index)
 
 
 def weighted_cross_entropy(logits, y, loss_weights, ignore_index=-100):
-  """Weighted cross-entropy loss (discounts certain tokens)."""
+
   logits = logits.view(-1, logits.shape[-1])
   y = y.view(-1)
   ce = F.cross_entropy(logits, y, ignore_index=ignore_index, reduction='none')
@@ -853,7 +822,7 @@ def weighted_cross_entropy(logits, y, loss_weights, ignore_index=-100):
 
 
 class BiMambaPreTrainedModel(PreTrainedModel):
-  """PreTrainedModel wrapper for BiMamba backbone."""
+
 
   config_class = BiMambaConfig
   base_model_prefix = 'bimamba'
@@ -863,10 +832,10 @@ class BiMambaPreTrainedModel(PreTrainedModel):
   def _init_weights(
     self,
     module,
-    initializer_range=0.02,  # Now only used for embedding layer.
+    initializer_range=0.02,
     **kwargs,
   ):
-    """Adapted from: https://github.com/state-spaces/mamba/blob/main/mamba_ssm/models/mixer_seq_simple.py"""
+
 
     n_layer = self.config.n_layer
     initialized_cfg = self.config.initializer_cfg if self.config.initializer_cfg is not None else {}
@@ -882,31 +851,24 @@ class BiMambaPreTrainedModel(PreTrainedModel):
       nn.init.normal_(module.weight, std=initializer_range)
 
     if rescale_prenorm_residual:
-      # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
-      #   > A modified initialization which accounts for the accumulation on the residual path with model depth.
-      #   > Scale the weights of residual layers at initialization by a factor of 1/√N where N is the # of
-      #   residual layers.
-      #   >   -- GPT-2 :: https://openai.com/blog/better-language-models/
-      #
-      # Reference (Megatron-LM): https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/gpt_model.py
+
+
       for name, p in module.named_parameters():
         if name in ['out_proj.weight', 'fc2.weight']:
-          # Special Scaled Initialization --> There are 2 Layer Norms per Transformer Block
-          # Following Pytorch init, except scale by 1/sqrt(2 * n_layer)
-          # We need to reinit p since this code could be called multiple times
-          # Having just p *= scale would repeatedly scale it down
+
+
           nn.init.kaiming_uniform_(p, a=math.sqrt(5))
           with torch.no_grad():
             p /= math.sqrt(n_residuals_per_layer * n_layer)
 
 
 class BiMamba(BiMambaPreTrainedModel):
-  """BiMamba model that can be instantiated using HF patterns."""
+
 
   def __init__(self, config: BiMambaConfig, device=None, dtype=None, **kwargs):
     super().__init__(config)
 
-    # Adjust vocab size if vocab padding is set.
+
     if config.vocab_size % config.pad_vocab_size_multiple != 0:
       config.vocab_size += config.pad_vocab_size_multiple - (
         config.vocab_size % config.pad_vocab_size_multiple
@@ -926,7 +888,7 @@ class BiMamba(BiMambaPreTrainedModel):
     cond_embeds: Optional[torch.Tensor] = None,
     inference_params: Optional[InferenceParams] = None,
   ) -> Union[torch.Tensor, Tuple, BaseModelOutputWithNoAttention]:
-    """HF-compatible forward method."""
+
     output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
     return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -953,7 +915,7 @@ class BiMamba(BiMambaPreTrainedModel):
 
 
 class BiMambaForMaskedLM(BiMambaPreTrainedModel):
-  """HF-compatible BiMamba model for masked language modeling."""
+
 
   def __init__(self, config: BiMambaConfig, device=None, dtype=None, **kwargs):
     super().__init__(config, **kwargs)
@@ -961,36 +923,28 @@ class BiMambaForMaskedLM(BiMambaPreTrainedModel):
     self.bimamba = BiMamba(config, **factory_kwargs, **kwargs)
     self.config = config
     lm_head_in_dim = config.d_model
-    # LM head may only take in concatenated timestep embeddings
-    # if its weights are not tied to the vocab embedding
+
+
     self.lm_head = nn.Linear(
       lm_head_in_dim,
-      self.config.vocab_size,  # Use BiMamba config as it might have been updated
+      self.config.vocab_size,
       bias=False,
       **factory_kwargs,
     )
-    # Initialize weights and apply final processing
+
     self.post_init()
     if self.config.tie_word_embeddings:
       self.tie_weights()
 
   def init_weights(self):
-    """
-    If needed prunes and maybe initializes weights. If using a custom `PreTrainedModel`, you need to implement any
-    initialization logic in `_init_weights`.
-    """
 
-    # Initialize weights
+
     self.apply(self._initialize_weights)
 
-    # Tie weights should be skipped when not initializing all weights
-    # since from_pretrained(...) calls tie weights anyway.
 
   def post_init(self):
-    """
-    A method executed at the end of each Transformer model initialization, to execute code that needs the model's
-    modules properly initialized (such as weight initialization).
-    """
+
+
     self.init_weights()
     self._backward_compatibility_gradient_checkpointing()
 
@@ -1004,19 +958,19 @@ class BiMambaForMaskedLM(BiMambaPreTrainedModel):
     return self.lm_head
 
   def set_output_embeddings(self, new_embeddings):
-    """Overrides output embeddings."""
+
     self.lm_head = new_embeddings
 
   def tie_weights(self):
-    """Tie weights."""
+
     super().tie_weights()
 
   def get_encoder(self):
-    """Get encoder (backbone) for the model."""
+
     return self.bimamba
 
   def set_encoder(self, encoder):
-    """Set encoder (backbone) for the model."""
+
     self.bimamba = encoder
 
   def forward(
@@ -1032,12 +986,12 @@ class BiMambaForMaskedLM(BiMambaPreTrainedModel):
     inference_params: Optional[InferenceParams] = None,
     num_last_tokens: int = 0
   ) -> Union[Tuple, MaskedLMOutput]:
-    """HF-compatible forward method."""
+
 
     output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
     return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-    # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+
     outputs = self.bimamba(
       input_ids=input_ids,
       inputs_embeds=inputs_embeds,
@@ -1084,12 +1038,12 @@ class DiMamba(nn.Module, huggingface_hub.PyTorchModelHubMixin):
       self.sigma_map = None
     else:
       self.sigma_map = TimestepEmbedder(config.model.cond_dim)
-    if (config.training.guidance is not None or  # Training for / using CFG
+    if (config.training.guidance is not None or
         (hasattr(config, 'guidance')
          and config.guidance is not None
          and config.guidance.method == 'cfg')):
       self.cond_map = LabelEmbedder(
-        config.data.num_classes + 1,  # +1 for mask
+        config.data.num_classes + 1,
         config.model.cond_dim)
     else:
       self.cond_map = None
@@ -1217,9 +1171,9 @@ class DiMambaClassifier(nn.Module):
         x = x[..., 0]
       elif self.pooling == 'last':
         x = x[..., -1]
-      elif self.pooling == 'no_pooling':  # used for ar_fudge
+      elif self.pooling == 'no_pooling':
         pass
-      elif self.pooling == 'attention_mean':  # used for ar_pplm
+      elif self.pooling == 'attention_mean':
         masked_x = x * attention_mask.unsqueeze(2)
         x = torch.sum(masked_x, dim=1) / (
               torch.sum(attention_mask, dim=1,

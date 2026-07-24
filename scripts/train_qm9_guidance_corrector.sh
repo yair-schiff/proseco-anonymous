@@ -1,41 +1,25 @@
 #!/bin/bash
-#SBATCH -o ../watch_folder/%x_%j.out  # output file (%j expands to jobID)
-#SBATCH -N 1                          # Total number of nodes requested
-#SBATCH --get-user-env                # retrieve the users login environment
-#SBATCH --mem=64000                   # server memory requested (per node)
-#SBATCH -t 960:00:00                  # Time limit (hh:mm:ss)
-#SBATCH --partition=kuleshov \
-#SBATCH --constraint="[a5000]"
+#SBATCH -o ../watch_folder/%x_%j.out
+#SBATCH -N 1
+#SBATCH --get-user-env
+#SBATCH --mem=64000
+#SBATCH -t 960:00:00
 #SBATCH --ntasks-per-node=8
-#SBATCH --gres=gpu:8                  # Type/number of GPUs needed
-#SBATCH --open-mode=append            # Do not overwrite logs
-#SBATCH --requeue                     # Requeue upon preemption
-#SBATCH --exclude=snavely-compute-02,seo-compute-01
+#SBATCH --gres=gpu:8
+#SBATCH --open-mode=append
+#SBATCH --requeue
 
-<<comment
-#  Usage:
-cd scripts/
-PROP=<qed|ring_count>
-sbatch \
-  --export=ALL,PROP=${PROP} \
-  --job-name=train_qm9_${PROP}_guidance_corrector \
-  train_qm9_guidance_corrector.sh
-comment
-
-# Setup environment
-cd ../ || exit  # Go to the root directory of the repo
+cd ../ || exit
 source setup_env.sh
 export NCCL_P2P_LEVEL=NVL
 export HYDRA_FULL_ERROR=1
 
-# Expecting:
 if [ -z "${PROP}" ]; then
   echo "PROP is not set"
   exit 1
 fi
-RUN_NAME="corrector_${PROP}_v47"
+RUN_NAME="${RUN_NAME:-corrector_${PROP}}"
 
-# MDLM
 DIFFUSION="absorbing_state"
 PARAMETERIZATION="d3pm"
 SUBS_MASKING=True
@@ -50,7 +34,6 @@ MDLM_LOSS_WEIGHT=1.0
 CORRECTOR_LOSS_WEIGHT=1.0
 SAMPLING_EPS_TRAINING=1e-1
 
-# To enable preemption re-loading, set `hydra.run.dir` or
 srun python -u -m main \
   corrector_training=True \
   use_model_outputs_as_corrector_input=${USE_MODEL_OUTPUTS_AS_CORRECTOR_INPUT} \
@@ -89,5 +72,5 @@ srun python -u -m main \
   training.compute_loss_on_pad_tokens=True \
   trainer.max_steps=25_000 \
   trainer.val_check_interval=1.0 \
-  wandb.name="qm9_${RUN_NAME}" \
-  hydra.run.dir="${PWD}/outputs/qm9/${RUN_NAME}" \
+  wandb=null \
+  hydra.run.dir="${PWD}/outputs/qm9/${RUN_NAME}"

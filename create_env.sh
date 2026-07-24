@@ -1,24 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
-ENV_NAME="proseco"
+ENV_NAME="anonymous-code"
 PYTHON_VERSION="3.12.3"
 
 echo "=== Creating conda environment: ${ENV_NAME} ==="
-# Swapped cuda-nvcc for cuda-toolkit to get the full runtime libraries
-#conda create -y -n "${ENV_NAME}" \
-#    -c nvidia -c conda-forge -c defaults \
-#    python="${PYTHON_VERSION}" \
-#    cuda-toolkit=12.9 \
-#    ipykernel=6.29.5 \
-#    pip
+if ! conda env list | awk -v target="${ENV_NAME}" '$1 == target {found=1} END {exit !found}'; then
+    conda create -y -n "${ENV_NAME}" python="${PYTHON_VERSION}" pip
+fi
 
 echo "=== Activating environment ==="
 eval "$(conda shell.bash hook)"
 conda activate "${ENV_NAME}"
 
 echo "=== Configuring persistent environment variables ==="
-# This ensures CUDA_HOME and LD_LIBRARY_PATH are set every time you activate this env
 mkdir -p "${CONDA_PREFIX}/etc/conda/activate.d"
 mkdir -p "${CONDA_PREFIX}/etc/conda/deactivate.d"
 
@@ -38,7 +33,6 @@ unset OLD_LD_LIBRARY_PATH
 unset OLD_CUDA_HOME
 EOF
 
-# Source the newly created activation script for the current session
 source "${CONDA_PREFIX}/etc/conda/activate.d/env_vars.sh"
 
 echo "=== Installing pip packages ==="
@@ -92,21 +86,17 @@ pip install \
     pyparsing==3.3.2 \
     pytz==2026.1.post1
 
-# Installing nemo_skills 0.7.0 (required for llada/eval_llada.py)
-pip install "git+https://github.com/NVIDIA-NeMo/Skills.git@da85a881d972e6fec847b90cf553a0bf9bf10638"
+pip install nemo-skills==0.7.0
 
 echo "=== Installing CUDA extension packages (require torch at build time) ==="
 
-# Create a temporary directory inside your conda environment on the shared drive
 mkdir -p "${CONDA_PREFIX}/tmp"
 export TMPDIR="${CONDA_PREFIX}/tmp"
 
-# Install FlashAttention
 pip install flash-attn==2.7.3 --no-build-isolation --no-cache-dir
 
-# Install compatible causal-conv1d (v1.4.0) and Mamba (v2.2.4) versions
-pip install "causal-conv1d @ git+https://github.com/Dao-AILab/causal-conv1d.git@v1.4.0" --no-build-isolation --no-cache-dir
-pip install git+https://github.com/state-spaces/mamba.git@v2.2.4 --no-build-isolation --no-cache-dir
+pip install causal-conv1d==1.4.0 --no-build-isolation --no-cache-dir
+pip install mamba-ssm==2.2.4 --no-build-isolation --no-cache-dir
 
 echo "=== Cleaning up temporary build files ==="
 rm -rf "${CONDA_PREFIX}/tmp"
@@ -114,4 +104,3 @@ unset TMPDIR
 
 echo "=== Environment '${ENV_NAME}' is ready ==="
 echo "Activate with: conda activate ${ENV_NAME}"
-

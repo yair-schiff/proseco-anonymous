@@ -14,10 +14,7 @@ import noise_schedule
 
 
 class MicroAveragingMetric(torchmetrics.Metric):
-  """Micro-averaging metric.
 
-    Adapted from https://github.com/HazyResearch/hyena-dna/blob/main/src/tasks/metrics.py#L12
-  """
 
   def __init__(self, class_idx: typing.Optional[int] = 1,
                dist_sync_on_step=False):
@@ -34,7 +31,7 @@ class MicroAveragingMetric(torchmetrics.Metric):
     raise NotImplementedError
 
   def update(self, logits: torch.Tensor, y: torch.Tensor):
-    # update metric states
+
     preds = torch.argmax(logits, dim=-1)
     y = y.view(-1)
     assert preds.shape == y.shape, \
@@ -43,7 +40,7 @@ class MicroAveragingMetric(torchmetrics.Metric):
       self.numerator, self.denominator, preds, y)
 
   def compute(self):
-    # compute final result
+
     value = self.numerator.float() / self.denominator \
       if self.denominator.item() > 0. else torch.tensor(0.0)
     return value
@@ -54,7 +51,7 @@ class MicroAveragingMetric(torchmetrics.Metric):
 
 
 class CrossEntropy(MicroAveragingMetric):
-  """Calculates cross-entropy loss."""
+
   def _update(
       self, numerator, denominator, logits, y) -> tuple:
     with torch.no_grad():
@@ -66,7 +63,7 @@ class CrossEntropy(MicroAveragingMetric):
       denominator += y.numel()
     return numerator, denominator
 
-  # Overrides parent class to use logits and not (argmax) preds
+
   def update(self, logits: torch.Tensor, y: torch.Tensor):
     y = y.view(-1)
     self.numerator, self.denominator = self._update(
@@ -74,12 +71,7 @@ class CrossEntropy(MicroAveragingMetric):
 
 
 class Accuracy(MicroAveragingMetric):
-  """Calculates accuracy.
 
-    Can be used to calculate accuracy per class.
-    Copied from:
-      https://github.com/HazyResearch/hyena-dna/blob/main/src/tasks/metrics.py
-  """
 
   def _update(
       self, numerator, denominator, preds, y) -> tuple:
@@ -98,12 +90,7 @@ class Accuracy(MicroAveragingMetric):
 
 
 class Precision(MicroAveragingMetric):
-  """Calculates precision.
 
-    Can be used to calculate precision per class.
-    Adapted from:
-      https://github.com/HazyResearch/hyena-dna/blob/main/src/tasks/metrics.py
-  """
 
   def _update(self, numerator, denominator, preds, y) -> tuple:
     class_idx = self.class_idx
@@ -114,12 +101,7 @@ class Precision(MicroAveragingMetric):
 
 
 class Recall(MicroAveragingMetric):
-  """Calculate recall.
 
-    Can be used to calculate recall per class.
-    Adapted from:
-      https://github.com/HazyResearch/hyena-dna/blob/main/src/tasks/metrics.py
-  """
 
   def _update(self, numerator, denominator, preds, y) -> tuple:
     class_idx = self.class_idx
@@ -139,8 +121,7 @@ class Classifier(L.LightningModule):
     self.save_hyperparameters(ignore=['pretrained_backbone'])
     self.config = config
 
-    # This param indicates whether this model will be used
-    #  for guidance (False) or only evaluation (True).
+
     self.is_eval_classifier = getattr(
       config, 'is_eval_classifier', False)
 
@@ -181,10 +162,10 @@ class Classifier(L.LightningModule):
         f"Classifier backbone "
         f"{self.config.classifier_backbone} not "
         f"implemented.")
-    if pretrained_backbone is not None:  # For PPLM / NOS
+    if pretrained_backbone is not None:
       self.classifier_model.load_pretrained_encoder(
         pretrained_backbone)
-    # Metrics are automatically reset at end of epoch
+
     metrics = torchmetrics.MetricCollection({
       'cross_entropy': CrossEntropy(),
       'accuracy': Accuracy(class_idx=None),
@@ -213,8 +194,8 @@ class Classifier(L.LightningModule):
     self.fast_forward_batches = None
 
   def on_load_checkpoint(self, checkpoint):
-    # Copied from:
-    # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py#L41
+
+
     self.fast_forward_epochs = checkpoint['loops'][
       'fit_loop']['epoch_progress']['current']['completed']
     self.fast_forward_batches = checkpoint['loops'][
@@ -222,11 +203,8 @@ class Classifier(L.LightningModule):
       'current']['completed']
 
   def on_save_checkpoint(self, checkpoint):
-    # Copied from:
-    # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/tasks/seq.py
-    # ['epoch_loop.batch_progress']['total']['completed'] is
-    #  1 iteration behind, so we're using the optimizer's
-    #  progress.
+
+
     checkpoint['loops']['fit_loop'][
       'epoch_loop.batch_progress']['total'][
       'completed'] = checkpoint['loops']['fit_loop'][
@@ -239,10 +217,8 @@ class Classifier(L.LightningModule):
                        'epoch_loop.automatic_optimization.optim_progress'][
                        'optimizer']['step']['current'][
                        'completed'] * self.trainer.accumulate_grad_batches
-    # _batches_that_stepped tracks the number of global
-    # steps, not the number of local steps, so we don't
-    # multiply with self.trainer.accumulate_grad_batches
-    # here.
+
+
     checkpoint['loops']['fit_loop'][
       'epoch_loop.state_dict'][
       '_batches_that_stepped'] = \
@@ -262,8 +238,8 @@ class Classifier(L.LightningModule):
       checkpoint['sampler']['random_state'] = None
 
   def on_train_start(self):
-    # Adapted from:
-    # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
+
+
     distributed = (
         self.trainer._accelerator_connector.use_distributed_sampler
         and self.trainer._accelerator_connector.is_distributed)
@@ -298,11 +274,8 @@ class Classifier(L.LightningModule):
     self.trainer.fit_loop._combined_loader.flattened = updated_dls
 
   def forward(self, x, sigma=None, x_emb=None, attention_mask=None):
-    """Returns logits.
 
-      x_emb can be provided during PPLM / NoS-style guidance
-      (see: https://arxiv.org/abs/2305.20009).
-    """
+
     if self.is_eval_classifier:
       logits = self.classifier_model(x)
       if hasattr(logits, 'logits'):
@@ -314,9 +287,8 @@ class Classifier(L.LightningModule):
     return logits
 
   def get_log_probs(self, x, sigma, x_emb=None):
-    """Returns log probabilities.
-      Use for CBG-style guidance.
-    """
+
+
     if self.is_eval_classifier:
       raise NotImplementedError(
         '`get_log_prob` not implemented for classifiers '
@@ -348,10 +320,6 @@ class Classifier(L.LightningModule):
     return self._compute_loss(batch, prefix='val')
 
   def configure_optimizers(self):
-    # TODO(yair): Lightning currently giving this warning when using `fp16`:
-    #  "Detected call of `lr_scheduler.step()` before `optimizer.step()`. "
-    #  Not clear if this is a problem or not.
-    #  See: https://github.com/Lightning-AI/pytorch-lightning/issues/5558
     optimizer = torch.optim.AdamW(
       itertools.chain(self.classifier_model.parameters(),
                       self.noise.parameters()),
@@ -372,14 +340,8 @@ class Classifier(L.LightningModule):
     return [optimizer], [scheduler_dict]
 
   def _q_xt(self, x, move_chance):
-    """Computes the noisy sample xt.
 
-    Args:
-      x: int torch.Tensor with shape (batch_size,
-          diffusion_model_input_length), input.
-      move_chance: float torch.Tensor with shape
-        (batch_size, 1).
-    """
+
     move_indices = torch.rand(
       *x.shape, device=x.device) < move_chance
     if self.config.diffusion == 'absorbing_state':
@@ -399,7 +361,7 @@ class Classifier(L.LightningModule):
     if self.is_eval_classifier:
       logits = self.forward(x0)
     elif self.config.parameterization == 'ar':
-      # do not add noise for AR FUDGE and AR PPLM
+
       logits = self.forward(
         x0, attention_mask=attention_mask)
     else:
@@ -407,7 +369,7 @@ class Classifier(L.LightningModule):
       if self.T > 0:
         t = (t * self.T).to(torch.int)
         t = t / self.T
-        # t \in {1/T, 2/T, ..., 1}
+
         t += (1 / self.T)
       if self.change_of_variables:
         time_conditioning = t[:, None]
@@ -431,13 +393,13 @@ class Classifier(L.LightningModule):
       y = batch['label']
     if (not self.is_eval_classifier
         and getattr(self.config.training, 'use_label_smoothing', False)):
-      # Interpolate between one-hot and uniform distribution
+
       labels = (torch.nn.functional.one_hot(y, self.config.data.num_classes) * (1 - t)[..., None] +
            (1 / self.config.data.num_classes) * t[..., None])
     else:
       labels = y.view(-1)
     if getattr(self.config, 'is_fudge_classifier', False):
-      expanded_y = y.unsqueeze(1).expand(-1, logits.shape[1]) # batch x seq
+      expanded_y = y.unsqueeze(1).expand(-1, logits.shape[1])
       logits = logits.view(-1, self.config.data.num_classes)[attention_mask.flatten()==1, ...]
       y = expanded_y.flatten().long()[attention_mask.flatten()==1]
       loss = torch.nn.functional.cross_entropy(

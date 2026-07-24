@@ -1,7 +1,7 @@
 train: openwebtext-train
 valid: openwebtext-valid
 tokenizer_name_or_path: gpt2
-cache_dir: /share/kuleshov/ssahoo/textdiffusion/data
+cache_dir: ${oc.env:DATA_CACHE_DIR,./.data_cache}
 wrap: True
 streaming: False
 override_cache: False

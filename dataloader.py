@@ -3,9 +3,7 @@ import itertools
 import math
 import os
 import re
-import shutil
 import typing
-import urllib
 import zipfile
 
 import datasets
@@ -20,10 +18,7 @@ import utils
 LOGGER = utils.get_logger(__name__)
 
 
-# noinspection RegExpRedundantEscape
 def lm1b_detokenizer(x):
-  x = x.replace('http : / / ', 'http://')
-  x = x.replace('https : / / ', 'https://')
   x = re.sub(r' \'(\w+)', r"'\1", x)
   x = re.sub(r' (\w+) \. ', r' \1. ', x)
   x = re.sub(r' (\w+) \.$', r' \1.', x)
@@ -101,26 +96,8 @@ class Text8Tokenizer(transformers.PreTrainedTokenizer):
 
 def get_text8_dataset(cache_dir, max_seq_length=256,
                       drop_last=True, crop_train=False):
-  """Adapted from:
-    https://github.com/google-research/google-research/blob/master/d3pm/text/datasets.py#L344
 
-    Args:
-      cache_dir: str, path to cache directory.
-      max_seq_length: int, maximum length of sequences.
-          (default: 256, as in D3PM codebase.)
-      drop_last: bool, whether to drop the last incomplete
-          batch. (default: True, as in D3PM codebase.)
-      crop_train: bool, whether to subsample contiguous
-          subsequences from training example. serves to
-          make sure transformer models with absolute position
-          embeddings do not have incorrect position-wise
-          marginals. (default: False, but necessary to match D3PM AR)
 
-    Returns:
-      dataset: dataset.DatasetDict, with keys 'train',
-          'valid', 'test'.
-  """
-  url = 'http://mattmahoney.net/dc/text8.zip'
   if not crop_train:
     cache_dir = f'{cache_dir}/text8'
   else:
@@ -130,7 +107,7 @@ def get_text8_dataset(cache_dir, max_seq_length=256,
     utils.fsspec_exists(os.path.join(cache_dir, split))
     for split in split_names
   ]):
-    # Check if raw data exists
+
     raw_cache_dir = os.path.join(cache_dir, 'raw_data')
     if not all([
       utils.fsspec_exists(
@@ -139,12 +116,9 @@ def get_text8_dataset(cache_dir, max_seq_length=256,
     ]):
       if not utils.fsspec_exists(
         os.path.join(raw_cache_dir, 'text8.zip')):
-        utils.fsspec_mkdirs(raw_cache_dir, exist_ok=True)
-        LOGGER.info('Downloading text8 from URL {}.'.format(url))
-        with (urllib.request.urlopen(url) as in_stream,
-              open(os.path.join(raw_cache_dir, 'text8.zip'),
-                   'wb') as out_file):
-          shutil.copyfileobj(in_stream, out_file)
+        raise FileNotFoundError(
+          'A local text8.zip is required at '
+          f'{os.path.join(raw_cache_dir, "text8.zip")}.')
 
       with fsspec.open(
         os.path.join(raw_cache_dir, 'text8.zip'),
@@ -152,7 +126,7 @@ def get_text8_dataset(cache_dir, max_seq_length=256,
         rawdata = zipfile.ZipFile(f).read(
           'text8').decode('utf-8')
 
-      # Splits taken from D3PM codebase
+
       splits = {
         'train': rawdata[:90_000_000],
         'validation': rawdata[90_000_000: 95_000_000],
@@ -172,9 +146,9 @@ def get_text8_dataset(cache_dir, max_seq_length=256,
         with fsspec.open(_path, 'r') as f:
           splits[split] = f.read()
 
-    # Chunk and save as datasets.DatasetDict
+
     def chunks(lst, n):
-      """Yield successive n-sized chunks from lst."""
+
       for i in range(0, len(lst), n):
         yield lst[i:i + n]
 
@@ -198,18 +172,12 @@ def get_text8_dataset(cache_dir, max_seq_length=256,
 
 def _group_texts(examples, block_size, bos, eos,
                  add_special_tokens=True):
-  # Concatenate all texts.
+
   concatenated_examples = list(itertools.chain(* examples['input_ids']))
   total_length = len(concatenated_examples)
-  # TODO(yair): look into not dropping the remainder but rather padding it.
-  # We drop the small remainder, and if the total_length < block_size - 2
-  # we exclude this batch and return an empty dict.
-  # We could add padding if the model supported it instead of
-  # this drop, you can customize this part to your needs.
-  # `-2` to account for [BOS] and [EOS] to be added below
   new_block_size = block_size - (2 if add_special_tokens else 0)
   total_length = (total_length // new_block_size) * new_block_size
-  # Split by chunks of max_len.
+
   result = {}
   _values = []
   _attn_masks = []
@@ -233,7 +201,8 @@ def get_dataset(
     block_size=1024, num_proc=len(os.sched_getaffinity(0)),
     streaming=False, override_cache=False,
     add_special_tokens=True,
-    label_col=None, label_threshold=None):
+    label_col=None, label_threshold=None,
+    dataset_name_or_path=None):
   if label_col is not None:
     label_suffix = f'_label-{label_col}'
     if label_threshold is not None:
@@ -252,7 +221,7 @@ def get_dataset(
 
   crop_train = dataset_name == 'text8-crop'
   if mode == 'train' and crop_train:
-    # double block size for subsampling
+
     block_size *= 2
 
   if dataset_name == 'text8':
@@ -266,12 +235,14 @@ def get_dataset(
       streaming=streaming,
       trust_remote_code=True)
   elif dataset_name == 'qm9':
+    if dataset_name_or_path is None:
+      raise ValueError('QM9 dataset path must be configured.')
     dataset = datasets.load_dataset(
-      'yairschiff/qm9',
+      dataset_name_or_path,
       cache_dir=cache_dir,
       streaming=streaming,
       trust_remote_code=True,
-      split='train')  # Dataset only has 'train' split
+      split='train')
     if label_threshold is not None:
       pctiles = label_threshold if isinstance(label_threshold, list) \
         else [label_threshold]
@@ -284,7 +255,7 @@ def get_dataset(
         f"{label_col}_threshold", threshold.astype(int))
       label_col = f"{label_col}_threshold"
     dataset = dataset.train_test_split(
-      test_size=0.05, seed=42)  # hard-coded seed & size
+      test_size=0.05, seed=42)
     dataset = dataset[mode]
   elif dataset_name == 'openwebtext-train':
     dataset = datasets.load_dataset(
@@ -351,7 +322,7 @@ def get_dataset(
       if add_special_tokens:
         tokens = {'input_ids':
                   [t + [EOS] for t in tokens['input_ids']]}
-        # Still missing BOS; will be added in group_texts
+
       else:
         tokens = {'input_ids': tokens['input_ids']}
     else:
@@ -425,9 +396,7 @@ def get_tokenizer(config):
       (tokenizer.bos_token, tokenizer.bos_token_id),
       (tokenizer.eos_token, tokenizer.eos_token_id))
 
-  # For wrapped batches:
-  #  [BOS] sent1 [EOS] sent2-fragment [EOS]
-  #  [BOS] sent2-fragment [EOS] sent3 [EOS]
+
   if tokenizer.bos_token is None:
     if tokenizer.cls_token is None:
       raise AttributeError(
@@ -478,7 +447,9 @@ def get_dataloaders(config, tokenizer, skip_train=False,
       override_cache=config.data.override_cache,
       add_special_tokens=config.data.add_special_tokens,
       label_col=label_col,
-      label_threshold=getattr(config.data, 'label_col_pctile', None))
+      label_threshold=getattr(config.data, 'label_col_pctile', None),
+      dataset_name_or_path=getattr(
+        config.data, 'dataset_name_or_path', None))
   if config.data.valid in [
     'text8', 'lm1b', 'amazon_polarity', 'qm9',
     'ten_species']:
@@ -499,7 +470,9 @@ def get_dataloaders(config, tokenizer, skip_train=False,
       override_cache=config.data.override_cache,
       add_special_tokens=config.data.add_special_tokens,
       label_col=label_col,
-      label_threshold=getattr(config.data, 'label_col_pctile', None))
+      label_threshold=getattr(config.data, 'label_col_pctile', None),
+      dataset_name_or_path=getattr(
+        config.data, 'dataset_name_or_path', None))
 
   if skip_train:
     train_loader = None
@@ -529,20 +502,17 @@ def get_dataloaders(config, tokenizer, skip_train=False,
       pin_memory=config.loader.pin_memory,
       shuffle=shuffle_valid,
       generator=generator)
-    # Will be used in generative perplexity calculation
+
     valid_loader.tokenizer = tokenizer
 
   return train_loader, valid_loader
 
 
-# Samplers adapted from: https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/fault_tolerant_sampler.py
 class RandomFaultTolerantSampler(torch.utils.data.RandomSampler):
 
   def __init__(self, *args, generator=None, **kwargs):
-    # TD [2022-07-17]: We don't force the seed to be zero. We generate random seed,
-    # which should be reproducible if pl.seed_everything was called beforehand.
-    # This means that changing the seed of the experiment will also change the
-    # sampling order.
+
+
     if generator is None:
       seed = int(torch.empty((), dtype=torch.int64).random_().item())
       generator = torch.Generator().manual_seed(seed)
@@ -558,11 +528,9 @@ class RandomFaultTolerantSampler(torch.utils.data.RandomSampler):
   def load_state_dict(self, state_dict):
     self.generator.set_state(state_dict.get('random_state'))
     self.counter = state_dict['counter']
-    # self.start_counter = self.counter
+
     self.restarting = True
 
-  # TD [2022-08-28] Setting the len will cause PL to think there are only a few batches left per
-  # epoch, and subsequent epoch will have very few batches.
 
   def __iter__(self) -> typing.Iterator[int]:
     n = len(self.data_source)
@@ -598,19 +566,18 @@ class FaultTolerantDistributedSampler(torch.utils.data.DistributedSampler):
     self.counter = state_dict['counter']
     self.restarting = True
 
-  # TD [2022-08-28] Setting the len will cause PL to think there are only a few batches left per
-  # epoch, and subsequent epoch will have very few batches.
+
   def __iter__(self):
     if self.shuffle:
-      # deterministically shuffle based on epoch and seed
+
       g = torch.Generator()
       g.manual_seed(self.seed + self.epoch)
-      indices = torch.randperm(len(self.dataset), generator=g).tolist()  # type: ignore[arg-type]
+      indices = torch.randperm(len(self.dataset), generator=g).tolist()
     else:
-      indices = list(range(len(self.dataset)))  # type: ignore[arg-type]
+      indices = list(range(len(self.dataset)))
 
     if not self.drop_last:
-      # add extra samples to make it evenly divisible
+
       padding_size = self.total_size - len(indices)
       if padding_size <= len(indices):
         indices += indices[:padding_size]
@@ -618,11 +585,11 @@ class FaultTolerantDistributedSampler(torch.utils.data.DistributedSampler):
         indices += (indices * math.ceil(
           padding_size / len(indices)))[:padding_size]
     else:
-      # remove tail of data to make it evenly divisible.
+
       indices = indices[:self.total_size]
     assert len(indices) == self.total_size
 
-    # subsample
+
     indices = indices[self.rank:self.total_size:self.num_replicas]
     assert len(indices) == self.num_samples
 

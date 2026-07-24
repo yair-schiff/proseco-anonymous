@@ -1,6 +1,3 @@
-"""Proseco model for Hugging Face.
-
-"""
 import math
 import typing
 
@@ -13,9 +10,8 @@ import torch.nn.functional as F
 import transformers
 from transformers import modeling_outputs
 
-from .configuration_proseco import ProsecoConfig
+from .configuration_corrector import CorrectorConfig
 
-# Flags required to enable jit fusion kernels
 torch._C._jit_set_profiling_mode(False)
 torch._C._jit_set_profiling_executor(False)
 torch._C._jit_override_can_fuse_on_cpu(True)
@@ -47,7 +43,6 @@ def get_bias_dropout_add_scale(training):
 	return _bias_dropout_add
 
 
-# function overload
 def modulate(x: torch.Tensor,
 			 shift: torch.Tensor,
 			 scale: torch.Tensor) -> torch.Tensor:
@@ -99,10 +94,8 @@ class Rotary(torch.nn.Module):
 			t = torch.arange(x.shape[seq_dim], device=x.device).type_as(self.inv_freq)
 			freqs = torch.einsum("i,j->ij", t, self.inv_freq.clone())
 			emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
-			# dims are: batch, seq_len, qkv, head, dim
 			self.cos_cached = emb.cos()[None, :, None, None, :].repeat(1,1,3,1,1)
 			self.sin_cached = emb.sin()[None, :, None, None, :].repeat(1,1,3,1,1)
-			# This makes the transformation on v an identity.
 			self.cos_cached[:,:,2,:,:].fill_(1.)
 			self.sin_cached[:,:,2,:,:].fill_(0.)
 
@@ -120,14 +113,10 @@ def apply_rotary_pos_emb(qkv, cos, sin):
 	return flash_attn.layers.rotary.apply_rotary_emb_qkv_(qkv, cos, sin)
 
 
-# function overload
 def modulate(x, shift, scale):
 	return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
-#################################################################################
-#                                  Layers                                       #
-#################################################################################
 class LayerNorm(nn.Module):
 	def __init__(self, dim):
 		super().__init__()
@@ -140,7 +129,6 @@ class LayerNorm(nn.Module):
 
 
 def residual_linear(x, W, x_skip, residual_scale):
-	"""x_skip + residual_scale * W @ x"""
 	dim_out, dim_in = W.shape[0], W.shape[1]
 	return torch.addmm(
 		x_skip.view(-1, dim_out),
@@ -149,13 +137,7 @@ def residual_linear(x, W, x_skip, residual_scale):
 		alpha=residual_scale).view(*x.shape[:-1], dim_out)
 
 
-#################################################################################
-#               Embedding Layers for Timesteps and Class Labels                 #
-#################################################################################
 class TimestepEmbedder(nn.Module):
-	"""
-	Embeds scalar timesteps into vector representations.
-	"""
 	def __init__(self, hidden_size, frequency_embedding_size=256):
 		super().__init__()
 		self.mlp = nn.Sequential(
@@ -166,15 +148,6 @@ class TimestepEmbedder(nn.Module):
 
 	@staticmethod
 	def timestep_embedding(t, dim, max_period=10000):
-		"""
-		Create sinusoidal timestep embeddings.
-		:param t: a 1-D Tensor of N indices, one per batch element.
-						  These may be fractional.
-		:param dim: the dimension of the output.
-		:param max_period: controls the minimum frequency of the embeddings.
-		:return: an (N, D) Tensor of positional embeddings.
-		"""
-		# https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
 		half = dim // 2
 		freqs = torch.exp(
 			- math.log(max_period)
@@ -195,7 +168,6 @@ class TimestepEmbedder(nn.Module):
 
 
 class LabelEmbedder(nn.Module):
-  """Embeds class labels into vector representations."""
   def __init__(self, num_classes, cond_size):
     super().__init__()
     self.embedding_table = nn.Embedding(num_classes,
@@ -207,38 +179,23 @@ class LabelEmbedder(nn.Module):
     return embeddings
 
 
-#################################################################################
-#                                 Core Model                                    #
-#################################################################################
-
 def regular_attention_multi_headed(qkv):
-	# Assuming qkv is a tensor with shape [batch, seq_len, 3, num_heads, head_dim]
-	# where the 3 represents Q, K, V packed in that order
 	batch_size, seq_len, _, num_heads, head_dim = qkv.shape
-	# Separate Q, K, V from the packed qkv tensor
-	# [batch_size, seq_len, num_heads, head_dim]
 	q = qkv[:, :, 0, :, :]
 	k = qkv[:, :, 1, :, :]
 	v = qkv[:, :, 2, :, :]
 
-	# Transpose and reshape Q and K for batched matrix multiplication:
-	# [batch_size, num_heads, seq_len, head_dim]
 	q = q.transpose(1, 2)
 	k = k.transpose(1, 2)
 	v = v.transpose(1, 2)
 
-	# Compute scaled dot-product attention
-	# [batch_size, num_heads, seq_len, seq_len]
 	attention_scores = torch.matmul(
 		q, k.transpose(-2, -1)) / math.sqrt(head_dim)
 
-	# Apply softmax to calculate the attention weights
 	attention_probs = F.softmax(attention_scores, dim=-1)
 
-	# [batch_size, num_heads, seq_len, head_dim]
 	attention_output = torch.matmul(attention_probs, v)
 
-	# [batch_size, seq_len, num_heads, head_dim]
 	attention_output = attention_output.transpose(1, 2)
 	return einops.rearrange(attention_output,
 							'b s h d -> b s (h d)')
@@ -284,7 +241,6 @@ class DDiTBlock(nn.Module):
 		(shift_msa, scale_msa, gate_msa, shift_mlp,
 		 scale_mlp, gate_mlp) = self.adaLN_modulation(c)[:, None].chunk(6, dim=2)
 
-		# attention operation
 		x_skip = x
 		x = modulate_fused(self.norm1(x), shift_msa, scale_msa)
 
@@ -312,7 +268,6 @@ class DDiTBlock(nn.Module):
 								  x_skip,
 								  self.dropout)
 
-		# mlp operation
 		x = bias_dropout_scale_fn(
 			self.mlp(modulate_fused(
 				self.norm2(x), shift_mlp, scale_mlp)),
@@ -356,7 +311,7 @@ class DDitFinalLayer(nn.Module):
 class DITBackbone(nn.Module):
 	def __init__(
 			self,
-			config: ProsecoConfig):
+			config: CorrectorConfig):
 		super().__init__()
 
 		self.config = config
@@ -369,7 +324,7 @@ class DITBackbone(nn.Module):
 			config.cond_dim)
 		if config.cfg:
 			self.cond_map = LabelEmbedder(
-				config.cfg_num_classes + 1,  # +1 for mask
+				config.cfg_num_classes + 1,
 				config.cond_dim)
 		else:
 			self.cond_map = None
@@ -435,14 +390,13 @@ class DITBackbone(nn.Module):
 			logits = self.output_layer(x, c)
 		return logits, all_hidden_states
 
-class Proseco(transformers.PreTrainedModel):
-	"""HF-compatible model."""
-	config_class = ProsecoConfig
-	base_model_prefix = "proseco"
+class CorrectorModel(transformers.PreTrainedModel):
+	config_class = CorrectorConfig
+	base_model_prefix = "corrector_model"
 
 	def __init__(
 			self,
-			config: ProsecoConfig):
+			config: CorrectorConfig):
 		super().__init__(config)
 		self.backbone = DITBackbone(config)
 
@@ -457,7 +411,6 @@ class Proseco(transformers.PreTrainedModel):
 	) -> typing.Union[
 		torch.Tensor, typing.Tuple,
 		modeling_outputs.MaskedLMOutput]:
-		"""HF-compatible forward method."""
 		output_hidden_states = (
 			output_hidden_states
 			if output_hidden_states is not None

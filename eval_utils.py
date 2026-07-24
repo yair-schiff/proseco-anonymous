@@ -48,7 +48,7 @@ def compute_generative_ppl(
   if max_length is None:
     max_length = max_length
   eval_model = eval_model.to(device)
-  # Re-tokenize using eval model's tokenizer
+
   tokenizer_kwargs = {
     'return_tensors': 'pt',
     'return_token_type_ids': False,
@@ -90,8 +90,7 @@ def compute_generative_ppl(
       token_mask = (sample_chunk != eval_model_tokenizer.eos_token_id)
       gen_ppl_metric.update(
         nlls, first_eos[..., 1:] + token_mask[..., 1:])
-      # gen_ppl_metric.update(
-      #   nlls, attn_mask_chunk[..., 1:])
+
 
   if return_metric:
     return gen_ppl_metric

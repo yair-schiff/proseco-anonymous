@@ -1,35 +1,17 @@
 #!/bin/bash
-#SBATCH -o ../watch_folder/%x_%j.out  # output file (%j expands to jobID)
-#SBATCH -N 1                          # Total number of nodes requested
-#SBATCH --get-user-env                # retrieve the users login environment
-#SBATCH --mem=32000                   # server memory requested (per node)
-#SBATCH -t 96:00:00                    # Time limit (hh:mm:ss)
-#SBATCH --partition=kuleshov,gpu      #
-#SBATCH --constraint="[h200|h100|a100|a6000|a5000]"
+#SBATCH -o ../watch_folder/%x_%j.out
+#SBATCH -N 1
+#SBATCH --get-user-env
+#SBATCH --mem=32000
+#SBATCH -t 96:00:00
 #SBATCH --ntasks-per-node=8
-#SBATCH --gres=gpu:8                  # Type/number of GPUs needed
-#SBATCH --open-mode=append            # Do not overwrite logs
-#SBATCH --requeue                     # Requeue upon preemption
+#SBATCH --gres=gpu:8
+#SBATCH --open-mode=append
+#SBATCH --requeue
 
-# Setup environment
-cd ../ || exit  # Go to the root directory of the repo
+cd ../ || exit
 source setup_env.sh || exit
 export HYDRA_FULL_ERROR=1
-
-# Expecting:
-#  - USE_HF (whether to use HF model)
-#  - CKPT (path to ckpt dir; not needed if using HF model)
-#  - CKPT_FILE (name of ckpt file; not needed if using HF model)
-#  - BATCH_SIZE (optional: default = 1)
-#  - NUM_SAMPLES (optional: default = 5000)
-#  - SAMPLING_STEPS (optional: default = 1024)
-#  - NUCLEUS_P (optional: default = 0.9)
-#  - SEED (optional: default = 1)
-#  - USE_FLOAT64 (optional: default = True)
-#  - CORRECTOR_SAMPLING (optional: default = argmax)
-#  - CORRECTOR_EVERY_N_STEPS (optional: default = 1)
-#  - CORRECTOR_STEPS (optional: default = 0)
-#  - CORRECTOR_TOP_K (optional: default = 0)
 
 if [ -z ${BATCH_SIZE} ]; then
   BATCH_SIZE=1
@@ -73,16 +55,12 @@ TRAIN_T=0
 time_conditioning=False
 sampling_use_cache=True
 if [[ "${USE_HF}" == "True" ]]; then
-  CKPT="kuleshov-group/proseco-owt"
+  CKPT=${MODEL_PATH:?MODEL_PATH must be set}
   generated_seqs_path="./outputs/owt/corrector/eval_samples/num_samples-${NUM_SAMPLES}--eval_float64--${USE_FLOAT64}--T-${SAMPLING_STEPS}--corrector_start_iter-${CORRECTOR_START_ITER}--corrector_sampling-${CORRECTOR_SAMPLING}--corrector_steps-${CORRECTOR_STEPS}--corrector_every_n_steps-${CORRECTOR_EVERY_N_STEPS}--corrector_top_k-${CORRECTOR_TOP_K}--nucleus_p-${NUCLEUS_P}--seed-${SEED}"
-  BACKBONE="hf_dit"  # override to use HF model
+  BACKBONE="hf_dit"
 else
-  if [ -z "${CKPT}" ]; then
-    CKPT="<CKPT_DIR>"  # TODO change this
-  fi
-  if [ -z "${CKPT_FILE}" ]; then
-    CKPT_FILE="checkpoints/<CKPT_FILE>"  # TODO: change this
-  fi
+  CKPT=${CKPT:?CKPT must be set}
+  CKPT_FILE=${CKPT_FILE:?CKPT_FILE must be set}
   generated_seqs_path="${CKPT}/eval_samples/num_samples-${NUM_SAMPLES}--eval_float64--${USE_FLOAT64}--T-${SAMPLING_STEPS}--corrector_start_iter-${CORRECTOR_START_ITER}--corrector_sampling-${CORRECTOR_SAMPLING}--corrector_steps-${CORRECTOR_STEPS}--corrector_every_n_steps-${CORRECTOR_EVERY_N_STEPS}--corrector_top_k-${CORRECTOR_TOP_K}--nucleus_p-${NUCLEUS_P}--seed-${SEED}"
 fi
 mkdir -p "${generated_seqs_path}"
@@ -91,8 +69,8 @@ if [ -v CKPT_FILE ]; then
 fi
 
 NUM_DEVICES=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
+MAUVE_P_FEATURES_PATH=${MAUVE_P_FEATURES_PATH:?MAUVE_P_FEATURES_PATH must be set}
 
-# shellcheck disable=SC2086
 PORT=29504
 torchrun --nproc_per_node ${NUM_DEVICES} --master_port=${PORT} main.py \
     hydra.output_subdir=null \
@@ -127,7 +105,5 @@ torchrun --nproc_per_node ${NUM_DEVICES} --master_port=${PORT} main.py \
     eval.max_samples=${NUM_SAMPLES} \
     eval.generated_samples_path=${generated_seqs_path} \
     +eval.generative_ppl_model_name_or_path="gpt2-large" \
-    +eval.mauve_p_features_path="/share/kuleshov/yzs2/nvidia-collab/human_reference_mauve_featurized.npy" \
-    wandb.group="gen_eval" \
-    wandb.id=null \
-    wandb.tags=null
+    +eval.mauve_p_features_path="${MAUVE_P_FEATURES_PATH}" \
+    wandb=null
