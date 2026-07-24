@@ -1,4 +1,4 @@
-# Anonymous Corrector Model Code
+# ProSeCo 
 
 This repository contains code for reproducing the experiments in an anonymous paper submission.
 
@@ -19,11 +19,11 @@ This repository contains code for reproducing the experiments in an anonymous pa
 9. ```guidance_eval/```: Guidance evaluation scripts
 10. ```llada/```: Code to reproduce evaluation of LLaDA SFT models
 
-### Corrector Training
+### ProSeCo Training
 
 <a name="training"></a>
 
-To enable corrector training, set the `corrector_training` flag in
+To enable ProSeCo training, set the `corrector_training` flag in
 [`config.yaml`](configs/config.yaml) to `True`.
 
 Additional parameters that can be tuned include the following:
@@ -39,7 +39,7 @@ corrector_loss_weight: 1.0
 corrector_loss_errors_upweighted: False
 ```
 
-### Corrector Sampling
+### ProSeCo Sampling
 
 <a name="inference"></a>
 

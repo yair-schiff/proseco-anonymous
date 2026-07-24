@@ -1,9 +1,9 @@
 ### LLaDA Corrector SFT Evaluation
 
-This directory contains scripts to reproduce the evaluation for the LLaDA corrector SFT
+This directory contains scripts to reproduce the evaluation for the LLaDA ProSeCo SFT
 experiments.
 
-The two parameters for corrector sampling are:
+The two parameters for ProSeCo sampling are:
 ```python
 apply_corrector_every_n_steps = ...
 max_corrector_steps_per_loop = ...
@@ -33,4 +33,4 @@ accelerate launch llada/eval_llada.py \
     --prompt_config llada/prompt_configs/code.yaml
 ```
 Use [`eval_wrapper.sh`](./eval_wrapper.sh) (also from the repo root)
-to sweep over the corrector hyperparameters.
+to sweep over the ProSeCo hyperparameters.
